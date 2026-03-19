@@ -41,7 +41,7 @@
 │       ├── spiders/        # 每个来源独立 spider
 │       └── writers/        # DB/归档写入
 ├── alembic/                # DB 迁移脚本目录
-├── docs/                   # 设计文档（含 data-model.md）
+├── docs/                   # 设计文档（含 data-model/crawler-architecture）
 ├── tests/                  # pytest
 ├── docker-compose.yml
 └── pyproject.toml
@@ -138,7 +138,95 @@ alembic upgrade head
 
 数据模型说明见：`docs/data-model.md`
 
-## 6. 测试
+## 6. Scrapy 采集启动
+
+先查看可用 spider：
+
+```bash
+cd crawler
+scrapy list
+```
+
+### 6.1 运行真实样板源（安徽省公共资源交易监管网-政府采购）
+
+最小抓取（1 页，默认写入本地 `jsonl`）：
+
+```bash
+cd crawler
+scrapy crawl anhui_ggzy_zfcg -a max_pages=1
+```
+
+输出说明：
+- 原始页面归档到 `data/raw/`
+- 结构化数据写入 `data/staging/*.jsonl`
+
+字段映射和数据流详见：
+- `docs/source-anhui-ggzy-zfcg.md`
+- `docs/crawler-architecture.md`
+
+### 6.2 写入数据库（PostgreSQL）
+
+确保数据库已迁移到最新后，使用 `sqlalchemy` writer：
+
+```bash
+cd crawler
+CRAWLER_WRITER_BACKEND=sqlalchemy \
+CRAWLER_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/tender_phase1 \
+scrapy crawl anhui_ggzy_zfcg -a max_pages=1
+```
+
+可用以下 SQL 验证入库：
+
+```sql
+SELECT COUNT(*) FROM raw_document;
+SELECT COUNT(*) FROM tender_notice;
+SELECT COUNT(*) FROM notice_version;
+SELECT COUNT(*) FROM tender_attachment;
+SELECT COUNT(*) FROM crawl_error;
+```
+
+### 6.3 去重与版本策略（第一期）
+
+写入层统一固化以下规则（与具体 spider 解耦）：
+- URL 去重：`normalized_url -> url_hash`，同源同 URL upsert 到 `raw_document`
+- 内容去重：同源 `content_hash` 命中标记重复内容；`notice_version` 按 `content_hash` 去重
+- 公告归并：`external_id` > `detail_page_url` > `title` 生成 `tender_notice.dedup_hash`
+- 版本跟踪：
+  - 重复抓取且内容未变：不新增 `notice_version`
+  - 内容变化：新增版本并更新 `tender_notice.current_version_id`
+  - `tender_notice` 保存当前快照，`notice_version` 保存历史快照
+- 公告类型规范化：统一为 `announcement/change/result`，非法值回退 `announcement`
+
+详细说明见：
+- `docs/data-model.md`
+- `docs/crawler-architecture.md`
+
+### 6.4 公告附件管理（第一期）
+
+附件处理链路：
+1. parser 从公告正文抽取附件链接（支持相对链接转绝对链接）
+2. `AttachmentArchivePipeline` 可选归档：
+   - 默认 `noop`（不下载，仅管理元数据）
+   - `local`（下载并归档到本地）
+3. writer 将附件 upsert 到 `tender_attachment`，并关联：
+   - `tender_notice`
+   - `notice_version`（优先 `notice_version_no`，否则当前版本）
+   - `raw_document`（若存在同 URL 的归档记录）
+
+附件去重：
+- `file_url` 标准化后计算 `url_hash`
+- 同源同 `url_hash` 不重复写入，执行更新（upsert）
+
+启用本地附件归档示例：
+
+```bash
+cd crawler
+ATTACHMENT_ARCHIVER_BACKEND=local \
+ATTACHMENT_ARCHIVE_DIR=../data/attachments \
+scrapy crawl anhui_ggzy_zfcg -a max_pages=1
+```
+
+## 7. 测试
 
 ```bash
 pytest
@@ -147,3 +235,5 @@ pytest
 当前包含：
 - 最小健康检查接口测试 `tests/test_health.py`
 - 数据模型约束测试 `tests/test_models.py`
+- Crawler parser/pipeline/spider 基础测试 `tests/crawler/*.py`
+- 安徽样板源 parser/spider/SQLAlchemy writer 最小测试 `tests/crawler/test_anhui_ggzy_zfcg_*.py`

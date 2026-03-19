@@ -1,22 +1,14 @@
-from datetime import datetime, timezone
+from __future__ import annotations
 
-import scrapy
+from tender_crawler.parsers import ExampleSourceParser
+from tender_crawler.spiders.base_source_spider import BaseSourceSpider
 
-from tender_crawler.parsers.base import BaseTenderParser
 
+class ExampleSourceSpider(BaseSourceSpider):
+    """Runnable sample spider for framework verification."""
 
-class ExampleSourceSpider(scrapy.Spider):
     name = "example_source"
+    source_code = "example_source"
     allowed_domains = ["example.com"]
     start_urls = ["https://example.com/"]
-
-    parser = BaseTenderParser()
-
-    def parse(self, response: scrapy.http.Response):
-        yield {
-            "source": self.name,
-            "url": response.url,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "raw_html": response.text,
-            "normalized": self.parser.parse(response.text),
-        }
+    parser_cls = ExampleSourceParser

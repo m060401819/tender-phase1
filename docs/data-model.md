@@ -157,3 +157,43 @@
 - 不含 AI 语义分析字段
 - 不含企业资质匹配字段
 - 不含投标文件生成字段
+
+## 5. 去重与版本策略（写入层固化）
+
+去重与版本逻辑由写入层统一执行（`writers/sqlalchemy_writer.py` + `services/deduplication.py`），不依赖具体 spider 的临时实现细节。
+
+### 5.1 URL 去重
+- 对 `raw_document.url` 做标准化（host 小写、query 排序、去 fragment）得到 `normalized_url`
+- 计算 `url_hash = sha256(normalized_url)`
+- 按 `UNIQUE(source_site_id, url_hash)` 做 upsert
+- 命中同 URL 时更新最新元数据，并标记 `is_duplicate_url=true`
+
+### 5.2 内容去重
+- `raw_document.content_hash` 优先使用上游传入值；缺失时由写入层对正文计算
+- 同源存在相同 `content_hash` 且 URL 不同时，标记 `is_duplicate_content=true`
+- `notice_version` 维度按 `UNIQUE(notice_id, content_hash)` 保证同公告同内容只保留一个版本快照
+
+### 5.3 公告归并（`tender_notice.dedup_hash`）
+写入层生成稳定归并键，优先级如下：
+1. `external_id`
+2. `detail_page_url`（标准化后）
+3. `title`（标准化后）
+
+最终 `dedup_hash = sha256(source_code + merge_strategy + identity_value)`。
+
+说明：
+- 同 `external_id` 归并为同一公告
+- 无 `external_id` 时，同 `detail_page_url` 归并
+- 再退化到标题归并（用于弱标识来源）
+
+### 5.4 版本跟踪
+- 同一公告重复抓取且 `content_hash` 不变：不新增 `notice_version`
+- 同一公告 `content_hash` 变化：新增版本，`version_no` 递增
+- `tender_notice` 保存当前快照字段（标题、类型、发布时间、预算等）
+- `notice_version` 保存历史快照（含 `structured_data`）
+- 新版本标记 `is_current=true`，旧版本统一置为 `false`
+- `tender_notice.current_version_id` 指向当前版本
+
+### 5.5 公告类型规范化
+- 写入层统一规范到枚举：`announcement` / `change` / `result`
+- 非法值自动回退为 `announcement`
