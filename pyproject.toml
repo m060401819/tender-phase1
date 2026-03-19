@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tender-phase1"
+version = "0.1.0"
+description = "Tender aggregation platform phase-1 scaffold"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0,<1.0.0",
+  "uvicorn[standard]>=0.30.0,<1.0.0",
+  "pydantic-settings>=2.4.0,<3.0.0",
+  "sqlalchemy>=2.0.0,<3.0.0",
+  "psycopg[binary]>=3.2.0,<4.0.0",
+  "alembic>=1.13.0,<2.0.0",
+  "scrapy>=2.11.0,<3.0.0",
+  "playwright>=1.52.0,<2.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0,<9.0.0",
+  "httpx>=0.27.0,<1.0.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
