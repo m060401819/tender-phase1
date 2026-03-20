@@ -21,6 +21,7 @@ class SourceSite(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     supports_js_render: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     crawl_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=60, server_default="60")
+    default_max_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     crawl_jobs: Mapped[list["CrawlJob"]] = relationship(back_populates="source_site")
     raw_documents: Mapped[list["RawDocument"]] = relationship(back_populates="source_site")

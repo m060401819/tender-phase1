@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Notices Admin</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --accent: #0f766e;
+      --accent-soft: #ccfbf1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #eef2ff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1380px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+    h1 { margin: 0; font-size: 20px; }
+    .meta { color: var(--muted); font-size: 13px; }
+    .links a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      margin-left: 14px;
+    }
+    form {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      background: #f9fafb;
+    }
+    input, select, button {
+      width: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    th { background: #f8fafc; font-weight: 600; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #0f766e;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .pager {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+    }
+    .pager a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .muted { color: var(--muted); }
+    .actions a { color: var(--accent); text-decoration: none; }
+
+    @media (max-width: 1200px) {
+      form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .head { flex-direction: column; align-items: flex-start; }
+      form { grid-template-columns: 1fr; }
+      table { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <div>
+          <h1>公告列表</h1>
+          <div class="meta">/admin/notices</div>
+        </div>
+        <div class="links">
+          <a href="{{ export_csv_url }}">导出 CSV</a>
+          <a href="{{ export_json_url }}">导出 JSON</a>
+        </div>
+      </div>
+
+      <form method="get" action="/admin/notices">
+        <input name="keyword" value="{{ keyword }}" placeholder="keyword (title/issuer/region)" />
+        <input name="source_code" value="{{ source_code }}" placeholder="source_code" />
+
+        <select name="notice_type">
+          <option value="">notice_type: 全部</option>
+          {% for option in notice_type_options %}
+          <option value="{{ option }}" {% if option == notice_type %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+
+        <input name="region" value="{{ region }}" placeholder="region" />
+        <input type="number" min="1" max="200" name="limit" value="{{ limit }}" placeholder="limit" />
+        <button type="submit">查询</button>
+      </form>
+
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>source_code</th>
+            <th>title</th>
+            <th>notice_type</th>
+            <th>issuer</th>
+            <th>region</th>
+            <th>published_at</th>
+            <th>deadline_at</th>
+            <th>budget_amount</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in notices %}
+          <tr>
+            <td>{{ item.id }}</td>
+            <td>{{ item.source_code }}</td>
+            <td>{{ item.title }}</td>
+            <td><span class="tag">{{ item.notice_type }}</span></td>
+            <td>{{ item.issuer or '-' }}</td>
+            <td>{{ item.region or '-' }}</td>
+            <td>{{ item.published_at }}</td>
+            <td>{{ item.deadline_at }}</td>
+            <td>{{ item.budget_amount }}</td>
+            <td class="actions"><a href="/admin/notices/{{ item.id }}">详情</a></td>
+          </tr>
+          {% endfor %}
+          {% if not notices %}
+          <tr>
+            <td colspan="10" class="muted">暂无公告记录</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+
+      <div class="pager">
+        <div class="muted">total={{ total }} | limit={{ limit }} | offset={{ offset }}</div>
+        <div>
+          {% if prev_url %}<a href="{{ prev_url }}">上一页</a>{% else %}<span class="muted">上一页</span>{% endif %}
+          <span class="muted" style="margin:0 8px;">|</span>
+          {% if next_url %}<a href="{{ next_url }}">下一页</a>{% else %}<span class="muted">下一页</span>{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

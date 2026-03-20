@@ -50,6 +50,12 @@ def test_tender_notice_core_fields_exist() -> None:
         assert column in table.c
 
 
+def test_source_site_runtime_config_fields_exist() -> None:
+    table = _table("source_site")
+    for column in ["is_active", "supports_js_render", "crawl_interval_minutes", "default_max_pages"]:
+        assert column in table.c
+
+
 def test_tender_notice_type_constraint_exists() -> None:
     checks = "\n".join(_check_sql("tender_notice"))
     assert "announcement" in checks

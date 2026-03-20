@@ -18,6 +18,7 @@ from app.models import (
     TenderAttachment,
     TenderNotice,
 )
+from app.services import CrawlJobService
 from tender_crawler.services import DeduplicationService
 from tender_crawler.writers.base import BaseErrorWriter, BaseNoticeWriter, BaseRawDocumentWriter
 
@@ -44,6 +45,7 @@ class SqlAlchemyWriterContext:
     def __init__(self, database_url: str) -> None:
         self.engine = create_engine(database_url, pool_pre_ping=True)
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
+        self.crawl_job_service = CrawlJobService(session_factory=self.session_factory)
         self._source_cache: dict[str, int] = {}
         self._closed = False
 
@@ -173,6 +175,14 @@ class SqlAlchemyRawDocumentWriter(BaseRawDocumentWriter):
                     existing.is_duplicate_url = True
                     existing.is_duplicate_content = is_dup_content
 
+                self.context.crawl_job_service.record_stats_in_session(
+                    session,
+                    job_id=_as_int(item.get("crawl_job_id")),
+                    pages_fetched=1,
+                    documents_saved=1,
+                    deduplicated_count=1 if (existing is not None or is_dup_content) else 0,
+                )
+
                 session.commit()
             except Exception:
                 session.rollback()
@@ -197,11 +207,17 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     source_url=_as_str(item.get("source_site_url")) or _guess_base_url(item),
                 )
 
-                notice = _resolve_notice(session, source_site_id=source_site_id, item=item)
+                notice, notice_created = _resolve_notice(session, source_site_id=source_site_id, item=item)
                 if notice is None:
                     return
 
                 _apply_notice_fields(notice, item)
+                self.context.crawl_job_service.record_stats_in_session(
+                    session,
+                    job_id=_as_int(item.get("crawl_job_id")),
+                    notices_upserted=1,
+                    deduplicated_count=0 if notice_created else 1,
+                )
                 session.commit()
             except Exception:
                 session.rollback()
@@ -218,13 +234,13 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     source_url=_as_str(item.get("source_site_url")) or _guess_base_url(item),
                 )
 
-                notice = _resolve_notice(session, source_site_id=source_site_id, item=item)
+                notice, _ = _resolve_notice(session, source_site_id=source_site_id, item=item)
                 if notice is None:
                     return
 
                 _apply_notice_fields(notice, item)
 
-                version = _resolve_notice_version(session, notice_id=notice.id, item=item)
+                version, version_created = _resolve_notice_version(session, notice_id=notice.id, item=item)
                 if version is None:
                     return
 
@@ -291,6 +307,12 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                         if latest is None or published > latest:
                             notice.latest_published_at = published
 
+                self.context.crawl_job_service.record_stats_in_session(
+                    session,
+                    job_id=_as_int(item.get("crawl_job_id")),
+                    deduplicated_count=0 if version_created else 1,
+                )
+
                 session.commit()
             except Exception:
                 session.rollback()
@@ -308,7 +330,7 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     source_url=_as_str(item.get("source_site_url")) or _guess_base_url(item),
                 )
 
-                notice = _resolve_notice(session, source_site_id=source_site_id, item=item)
+                notice, _ = _resolve_notice(session, source_site_id=source_site_id, item=item)
                 if notice is None:
                     return
 
@@ -358,6 +380,8 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     file_url=file_url,
                 )
 
+                attachment_exists = attachment is not None
+
                 if attachment is None:
                     attachment = TenderAttachment(
                         **_model_create_kwargs(
@@ -398,6 +422,12 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     downloaded_at = _as_datetime(item.get("downloaded_at"))
                     if downloaded_at is not None:
                         attachment.downloaded_at = downloaded_at
+
+                self.context.crawl_job_service.record_stats_in_session(
+                    session,
+                    job_id=_as_int(item.get("crawl_job_id")),
+                    deduplicated_count=1 if attachment_exists else 0,
+                )
 
                 session.commit()
             except Exception:
@@ -440,17 +470,23 @@ class SqlAlchemyErrorWriter(BaseErrorWriter):
                     )
                 )
                 session.add(error)
+                self.context.crawl_job_service.record_stats_in_session(
+                    session,
+                    job_id=_as_int(item.get("crawl_job_id")),
+                    error_count=1,
+                )
                 session.commit()
             except Exception:
                 session.rollback()
                 raise
 
 
-def _resolve_notice(session: Session, *, source_site_id: int, item: dict) -> TenderNotice | None:
+def _resolve_notice(session: Session, *, source_site_id: int, item: dict) -> tuple[TenderNotice | None, bool]:
     dedup_hash = _as_str(item.get("dedup_hash") or item.get("notice_dedup_hash"))
     external_id = _as_str(item.get("external_id") or item.get("notice_external_id"))
 
     notice = None
+    created = False
     if dedup_hash:
         notice = session.scalar(
             select(TenderNotice).where(
@@ -469,7 +505,7 @@ def _resolve_notice(session: Session, *, source_site_id: int, item: dict) -> Ten
     if notice is None:
         title = _as_str(item.get("title"))
         if not title:
-            return None
+            return None, False
         notice = TenderNotice(
             **_model_create_kwargs(
                 session,
@@ -494,8 +530,9 @@ def _resolve_notice(session: Session, *, source_site_id: int, item: dict) -> Ten
         )
         session.add(notice)
         session.flush()
+        created = True
 
-    return notice
+    return notice, created
 
 
 def _apply_notice_fields(notice: TenderNotice, item: dict) -> None:
@@ -537,7 +574,12 @@ def _apply_notice_fields(notice: TenderNotice, item: dict) -> None:
         notice.summary = summary
 
 
-def _resolve_notice_version(session: Session, *, notice_id: int, item: dict) -> NoticeVersion | None:
+def _resolve_notice_version(
+    session: Session,
+    *,
+    notice_id: int,
+    item: dict,
+) -> tuple[NoticeVersion | None, bool]:
     content_hash = _as_str(item.get("content_hash"))
     requested_version_no = _as_int(item.get("version_no")) or 1
 
@@ -549,7 +591,7 @@ def _resolve_notice_version(session: Session, *, notice_id: int, item: dict) -> 
             )
         )
         if version is not None:
-            return version
+            return version, False
 
     version = session.scalar(
         select(NoticeVersion).where(
@@ -559,7 +601,7 @@ def _resolve_notice_version(session: Session, *, notice_id: int, item: dict) -> 
     )
     if version is not None:
         if not content_hash or version.content_hash == content_hash:
-            return version
+            return version, False
 
         max_version_no = session.scalar(
             select(func.max(NoticeVersion.version_no)).where(NoticeVersion.notice_id == notice_id)
@@ -568,7 +610,7 @@ def _resolve_notice_version(session: Session, *, notice_id: int, item: dict) -> 
 
     title = _as_str(item.get("title"))
     if not title or not content_hash:
-        return None
+        return None, False
 
     version = NoticeVersion(
         **_model_create_kwargs(
@@ -594,7 +636,7 @@ def _resolve_notice_version(session: Session, *, notice_id: int, item: dict) -> 
     session.add(version)
     session.flush()
 
-    return version
+    return version, True
 
 
 def _as_str(value: object) -> str | None:

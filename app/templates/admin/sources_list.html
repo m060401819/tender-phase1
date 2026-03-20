@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sources Admin</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --accent: #0f766e;
+      --accent-soft: #ccfbf1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #eef2ff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    h1 { margin: 0; font-size: 20px; }
+    .meta { color: var(--muted); font-size: 13px; }
+    .links a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      margin-left: 14px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    th { background: #f8fafc; font-weight: 600; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #0f766e;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .muted { color: var(--muted); }
+    .actions a { color: var(--accent); text-decoration: none; }
+    @media (max-width: 760px) {
+      .head { flex-direction: column; align-items: flex-start; }
+      table { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <div>
+          <h1>来源管理</h1>
+          <div class="meta">/admin/sources</div>
+        </div>
+        <div class="links">
+          <a href="/admin/crawl-jobs">任务看板</a>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>code</th>
+            <th>name</th>
+            <th>base_url</th>
+            <th>is_active</th>
+            <th>supports_js_render</th>
+            <th>crawl_interval_minutes</th>
+            <th>default_max_pages</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for source in sources %}
+          <tr>
+            <td>{{ source.code }}</td>
+            <td>{{ source.name }}</td>
+            <td>{{ source.base_url }}</td>
+            <td><span class="tag">{{ source.is_active }}</span></td>
+            <td>{{ source.supports_js_render }}</td>
+            <td>{{ source.crawl_interval_minutes }}</td>
+            <td>{{ source.default_max_pages }}</td>
+            <td class="actions"><a href="/admin/sources/{{ source.code }}">详情</a></td>
+          </tr>
+          {% endfor %}
+          {% if not sources %}
+          <tr>
+            <td colspan="8" class="muted">暂无来源记录</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>

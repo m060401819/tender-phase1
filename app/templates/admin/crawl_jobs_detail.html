@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Crawl Job Detail</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #ecfeff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      margin-bottom: 16px;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .head h1 { margin: 0; font-size: 20px; }
+    .head a { color: var(--accent); text-decoration: none; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0;
+    }
+    .row {
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      padding: 12px 14px;
+    }
+    .row:nth-child(2n) { border-right: none; }
+    .k { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .v { font-size: 14px; word-break: break-word; }
+    .mono {
+      margin: 0;
+      padding: 16px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow: auto;
+      background: #0b1220;
+      color: #d1fae5;
+      border-radius: 0 0 14px 14px;
+    }
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: 1fr; }
+      .row { border-right: none; }
+      .head { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <h1>任务详情 #{{ job.id }}</h1>
+        <a href="/admin/crawl-jobs">返回列表</a>
+      </div>
+
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v">{{ job.id }}</span></div>
+        <div class="row"><span class="k">source_site_id</span><span class="v">{{ job.source_site_id }}</span></div>
+        <div class="row"><span class="k">source_code</span><span class="v">{{ job.source_code }}</span></div>
+        <div class="row"><span class="k">job_type</span><span class="v">{{ job.job_type }}</span></div>
+        <div class="row"><span class="k">status</span><span class="v">{{ job.status }}</span></div>
+        <div class="row"><span class="k">recent_crawl_error_count</span><span class="v">{{ job.recent_crawl_error_count }}</span></div>
+        <div class="row"><span class="k">started_at</span><span class="v">{{ job.started_at }}</span></div>
+        <div class="row"><span class="k">finished_at</span><span class="v">{{ job.finished_at }}</span></div>
+        <div class="row"><span class="k">pages_fetched</span><span class="v">{{ job.pages_fetched }}</span></div>
+        <div class="row"><span class="k">documents_saved</span><span class="v">{{ job.documents_saved }}</span></div>
+        <div class="row"><span class="k">notices_upserted</span><span class="v">{{ job.notices_upserted }}</span></div>
+        <div class="row"><span class="k">deduplicated_count</span><span class="v">{{ job.deduplicated_count }}</span></div>
+        <div class="row"><span class="k">error_count</span><span class="v">{{ job.error_count }}</span></div>
+        <div class="row"><span class="k">message</span><span class="v">{{ job.message or '-' }}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h1>原始 JSON</h1>
+      </div>
+      <pre class="mono" id="raw-json">{{ raw_json | safe }}</pre>
+    </div>
+  </div>
+</body>
+</html>

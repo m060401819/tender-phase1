@@ -30,6 +30,7 @@
   - 写入层可复用领域逻辑
   - 当前包含 `DeduplicationService`：URL 标准化、哈希计算、公告归并键、公告类型规范化
   - `AttachmentArchiver`：附件下载与本地归档接口（可插拔）
+  - `CrawlJobService`：抓取任务生命周期与统计累加（pending/running/succeeded/failed/partial）
 
 - `items.py`
   - 统一定义采集层数据契约（raw_document / tender_notice / notice_version / tender_attachment / crawl_error）
@@ -69,6 +70,7 @@
   - 公告归并（`external_id` > `detail_url` > `title`）
   - 版本去重与递增（相同内容不新增版本，内容变化新增版本）
   - 附件 URL 去重与 upsert，关联 `notice` / `notice_version` / `raw_document`
+  - `crawl_job` 统计回传（pages/documents/notices/dedup/errors）
 
 ## 3. 与数据模型的挂接点
 
@@ -87,6 +89,10 @@
 附件归档逻辑集中在：
 - `tender_crawler/services/attachment_archive.py`
 - `tender_crawler/pipelines.py::AttachmentArchivePipeline`
+
+任务管理逻辑集中在：
+- `app/services/crawl_job_service.py`
+- `scripts/run_crawl_job.py`
 
 ## 4. 扩展建议
 

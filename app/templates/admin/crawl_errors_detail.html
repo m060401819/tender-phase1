@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Crawl Error Detail</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #b45309;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #fffbeb 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1160px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .head h1 { margin: 0; font-size: 20px; }
+    .head a { color: var(--accent); text-decoration: none; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .row {
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      padding: 12px 14px;
+    }
+    .row:nth-child(2n) { border-right: none; }
+    .k { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .v { font-size: 14px; word-break: break-word; white-space: pre-wrap; }
+    .link { color: var(--accent); text-decoration: none; }
+    .muted { color: var(--muted); }
+    .mono {
+      margin: 0;
+      padding: 16px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow: auto;
+      background: #0b1220;
+      color: #fde68a;
+      border-radius: 0 0 14px 14px;
+    }
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: 1fr; }
+      .row { border-right: none; }
+      .head { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <h1>错误详情 #{{ error.id }}</h1>
+        <a href="/admin/crawl-errors">返回列表</a>
+      </div>
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v">{{ error.id }}</span></div>
+        <div class="row"><span class="k">source_code</span><span class="v">{{ error.source_code }}</span></div>
+        <div class="row">
+          <span class="k">crawl_job_id</span>
+          <span class="v">
+            {% if error.crawl_job_id %}
+            <a class="link" href="/admin/crawl-jobs/{{ error.crawl_job_id }}">{{ error.crawl_job_id }}</a>
+            {% else %}
+            -
+            {% endif %}
+          </span>
+        </div>
+        <div class="row"><span class="k">stage</span><span class="v">{{ error.stage }}</span></div>
+        <div class="row"><span class="k">error_type</span><span class="v">{{ error.error_type }}</span></div>
+        <div class="row"><span class="k">created_at</span><span class="v">{{ error.created_at }}</span></div>
+        <div class="row"><span class="k">url</span><span class="v">{{ error.url or '-' }}</span></div>
+        <div class="row"><span class="k">message</span><span class="v">{{ error.message }}</span></div>
+        <div class="row"><span class="k">detail</span><span class="v">{{ error.detail or '-' }}</span></div>
+        <div class="row"><span class="k">traceback</span><span class="v">{{ error.traceback or '-' }}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>关联 raw_document</h1></div>
+      {% if raw_document %}
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v"><a class="link" href="/admin/raw-documents/{{ raw_document.id }}">{{ raw_document.id }}</a></span></div>
+        <div class="row"><span class="k">document_type</span><span class="v">{{ raw_document.document_type }}</span></div>
+        <div class="row"><span class="k">fetched_at</span><span class="v">{{ raw_document.fetched_at }}</span></div>
+        <div class="row"><span class="k">storage_uri</span><span class="v">{{ raw_document.storage_uri }}</span></div>
+      </div>
+      {% else %}
+      <div class="row"><span class="v muted">暂无关联 raw_document</span></div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>关联 notice_version</h1></div>
+      {% if notice_version %}
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v">{{ notice_version.id }}</span></div>
+        <div class="row"><span class="k">notice_id</span><span class="v">{{ notice_version.notice_id }}</span></div>
+        <div class="row"><span class="k">version_no</span><span class="v">{{ notice_version.version_no }}</span></div>
+        <div class="row"><span class="k">is_current</span><span class="v">{{ notice_version.is_current }}</span></div>
+        <div class="row"><span class="k">notice_type</span><span class="v">{{ notice_version.notice_type }}</span></div>
+        <div class="row"><span class="k">title</span><span class="v">{{ notice_version.title }}</span></div>
+      </div>
+      {% else %}
+      <div class="row"><span class="v muted">暂无关联 notice_version</span></div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>关联 notice</h1></div>
+      {% if notice %}
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v"><a class="link" href="/admin/notices/{{ notice.id }}">{{ notice.id }}</a></span></div>
+        <div class="row"><span class="k">source_code</span><span class="v">{{ notice.source_code }}</span></div>
+        <div class="row"><span class="k">title</span><span class="v">{{ notice.title }}</span></div>
+        <div class="row"><span class="k">notice_type</span><span class="v">{{ notice.notice_type }}</span></div>
+        <div class="row"><span class="k">current_version_id</span><span class="v">{{ notice.current_version_id or '-' }}</span></div>
+      </div>
+      {% else %}
+      <div class="row"><span class="v muted">暂无关联 notice</span></div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>原始 JSON</h1></div>
+      <pre class="mono">{{ raw_json | safe }}</pre>
+    </div>
+  </div>
+</body>
+</html>

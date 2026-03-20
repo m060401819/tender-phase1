@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Crawl Errors Admin</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --accent: #b45309;
+      --accent-soft: #fef3c7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #fefce8 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1400px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+    h1 { margin: 0; font-size: 20px; }
+    .meta { color: var(--muted); font-size: 13px; }
+    form {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      background: #f9fafb;
+    }
+    input, select, button {
+      width: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    th { background: #f8fafc; font-weight: 600; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #92400e;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .pager {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+    }
+    .pager a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .muted { color: var(--muted); }
+    .actions a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .link {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    @media (max-width: 1200px) {
+      form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .head { flex-direction: column; align-items: flex-start; }
+      form { grid-template-columns: 1fr; }
+      table { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <h1>抓取错误列表</h1>
+        <div class="meta">/admin/crawl-errors</div>
+      </div>
+
+      <form method="get" action="/admin/crawl-errors">
+        <input name="source_code" value="{{ source_code }}" placeholder="source_code" />
+        <select name="stage">
+          <option value="">stage: 全部</option>
+          {% for option in stage_options %}
+          <option value="{{ option }}" {% if option == stage %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+        <input type="number" min="1" name="crawl_job_id" value="{{ crawl_job_id }}" placeholder="crawl_job_id" />
+        <input name="error_type" value="{{ error_type }}" placeholder="error_type" />
+        <input type="number" min="1" max="200" name="limit" value="{{ limit }}" placeholder="limit" />
+        <button type="submit">查询</button>
+      </form>
+
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>source_code</th>
+            <th>crawl_job_id</th>
+            <th>stage</th>
+            <th>error_type</th>
+            <th>message</th>
+            <th>url</th>
+            <th>created_at</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in errors %}
+          <tr>
+            <td>{{ item.id }}</td>
+            <td>{{ item.source_code }}</td>
+            <td>
+              {% if item.crawl_job_id %}
+              <a class="link" href="/admin/crawl-jobs/{{ item.crawl_job_id }}">{{ item.crawl_job_id }}</a>
+              {% else %}
+              -
+              {% endif %}
+            </td>
+            <td><span class="tag">{{ item.stage }}</span></td>
+            <td>{{ item.error_type }}</td>
+            <td>{{ item.message }}</td>
+            <td>{{ item.url or '-' }}</td>
+            <td>{{ item.created_at }}</td>
+            <td class="actions"><a href="/admin/crawl-errors/{{ item.id }}">详情</a></td>
+          </tr>
+          {% endfor %}
+          {% if not errors %}
+          <tr>
+            <td colspan="9" class="muted">暂无抓取错误记录</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+
+      <div class="pager">
+        <div class="muted">total={{ total }} | limit={{ limit }} | offset={{ offset }}</div>
+        <div>
+          {% if prev_url %}<a href="{{ prev_url }}">上一页</a>{% else %}<span class="muted">上一页</span>{% endif %}
+          <span class="muted" style="margin:0 8px;">|</span>
+          {% if next_url %}<a href="{{ next_url }}">下一页</a>{% else %}<span class="muted">下一页</span>{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

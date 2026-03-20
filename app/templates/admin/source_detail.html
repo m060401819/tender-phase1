@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Source Detail</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #ecfeff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 920px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      margin-bottom: 16px;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .head h1 { margin: 0; font-size: 20px; }
+    .head a { color: var(--accent); text-decoration: none; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .row {
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      padding: 12px 14px;
+    }
+    .row:nth-child(2n) { border-right: none; }
+    .k { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .v { font-size: 14px; word-break: break-word; }
+    .form {
+      padding: 16px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .form-grid {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    input, select, button {
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .hint {
+      width: 100%;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: 1fr; }
+      .row { border-right: none; }
+      .head { flex-direction: column; align-items: flex-start; }
+      .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <h1>来源详情 {{ source.code }}</h1>
+        <div>
+          <a href="/admin/sources">返回来源列表</a>
+          <span style="color:#cbd5e1; margin: 0 6px;">|</span>
+          <a href="/admin/crawl-jobs">任务看板</a>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v">{{ source.id }}</span></div>
+        <div class="row"><span class="k">code</span><span class="v">{{ source.code }}</span></div>
+        <div class="row"><span class="k">name</span><span class="v">{{ source.name }}</span></div>
+        <div class="row"><span class="k">base_url</span><span class="v">{{ source.base_url }}</span></div>
+        <div class="row"><span class="k">is_active</span><span class="v">{{ source.is_active }}</span></div>
+        <div class="row"><span class="k">supports_js_render</span><span class="v">{{ source.supports_js_render }}</span></div>
+        <div class="row"><span class="k">crawl_interval_minutes</span><span class="v">{{ source.crawl_interval_minutes }}</span></div>
+        <div class="row"><span class="k">default_max_pages</span><span class="v">{{ source.default_max_pages }}</span></div>
+        <div class="row"><span class="k">description</span><span class="v">{{ source.description or '-' }}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h1>编辑来源配置</h1>
+      </div>
+      <form class="form" method="post" action="/admin/sources/{{ source.code }}/config">
+        <div class="form-grid">
+          <div class="field">
+            <label for="is_active">is_active</label>
+            <select id="is_active" name="is_active">
+              <option value="true" {% if source.is_active %}selected{% endif %}>true</option>
+              <option value="false" {% if not source.is_active %}selected{% endif %}>false</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="supports_js_render">supports_js_render</label>
+            <select id="supports_js_render" name="supports_js_render">
+              <option value="true" {% if source.supports_js_render %}selected{% endif %}>true</option>
+              <option value="false" {% if not source.supports_js_render %}selected{% endif %}>false</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="crawl_interval_minutes">crawl_interval_minutes</label>
+            <input id="crawl_interval_minutes" name="crawl_interval_minutes" type="number" min="1" value="{{ source.crawl_interval_minutes }}" />
+          </div>
+          <div class="field">
+            <label for="default_max_pages">default_max_pages</label>
+            <input id="default_max_pages" name="default_max_pages" type="number" min="1" value="{{ source.default_max_pages }}" />
+          </div>
+        </div>
+        <button type="submit">保存来源配置</button>
+        <div class="hint">保存后会返回当前来源详情页，并展示最新配置值。</div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h1>手动触发抓取</h1>
+      </div>
+      <form class="form" method="post" action="/admin/sources/{{ source.code }}/crawl-jobs">
+        <label for="max_pages">max_pages</label>
+        <input id="max_pages" name="max_pages" type="number" min="1" value="{{ source.default_max_pages }}" />
+        <button type="submit">触发一次抓取</button>
+        <div class="hint">提交后将同步触发 spider，完成后跳转到对应 crawl_job 详情页。</div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

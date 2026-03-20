@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Notice Detail</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #ecfeff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1160px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .head h1 { margin: 0; font-size: 20px; }
+    .head a { color: var(--accent); text-decoration: none; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .row {
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      padding: 12px 14px;
+    }
+    .row:nth-child(2n) { border-right: none; }
+    .k { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .v { font-size: 14px; word-break: break-word; }
+    .mono {
+      margin: 0;
+      padding: 16px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow: auto;
+      background: #0b1220;
+      color: #d1fae5;
+      border-radius: 0 0 14px 14px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    th { background: #f8fafc; font-weight: 600; }
+    .muted { color: var(--muted); }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .toolbar label { color: var(--muted); font-size: 12px; }
+    .toolbar input {
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 10px;
+      min-width: 120px;
+      font-size: 13px;
+    }
+    .toolbar button {
+      height: 32px;
+      border: none;
+      border-radius: 8px;
+      padding: 0 12px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .toolbar a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .link {
+      color: var(--accent);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: 1fr; }
+      .row { border-right: none; }
+      .head { flex-direction: column; align-items: flex-start; }
+      table { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <h1>公告详情 #{{ notice.id }}</h1>
+        <div>
+          <a href="/admin/raw-documents?source_code={{ notice.source_code }}&from_notice_id={{ notice.id }}">同源原文列表</a>
+          <span style="margin: 0 8px; color: #6b7280;">|</span>
+          <a href="/admin/notices">返回列表</a>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v">{{ notice.id }}</span></div>
+        <div class="row"><span class="k">source_site_id</span><span class="v">{{ notice.source_site_id }}</span></div>
+        <div class="row"><span class="k">source_code</span><span class="v">{{ notice.source_code }}</span></div>
+        <div class="row"><span class="k">external_id</span><span class="v">{{ notice.external_id or '-' }}</span></div>
+        <div class="row"><span class="k">project_code</span><span class="v">{{ notice.project_code or '-' }}</span></div>
+        <div class="row"><span class="k">notice_type</span><span class="v">{{ notice.notice_type }}</span></div>
+        <div class="row"><span class="k">title</span><span class="v">{{ notice.title }}</span></div>
+        <div class="row"><span class="k">issuer</span><span class="v">{{ notice.issuer or '-' }}</span></div>
+        <div class="row"><span class="k">region</span><span class="v">{{ notice.region or '-' }}</span></div>
+        <div class="row"><span class="k">published_at</span><span class="v">{{ notice.published_at }}</span></div>
+        <div class="row"><span class="k">deadline_at</span><span class="v">{{ notice.deadline_at }}</span></div>
+        <div class="row"><span class="k">budget_amount</span><span class="v">{{ notice.budget_amount }} {{ notice.budget_currency }}</span></div>
+        <div class="row"><span class="k">first_published_at</span><span class="v">{{ notice.first_published_at }}</span></div>
+        <div class="row"><span class="k">latest_published_at</span><span class="v">{{ notice.latest_published_at }}</span></div>
+        <div class="row"><span class="k">current_version_id</span><span class="v">{{ notice.current_version_id or '-' }}</span></div>
+        <div class="row"><span class="k">summary</span><span class="v">{{ notice.summary or '-' }}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>来源信息</h1></div>
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v">{{ source.id }}</span></div>
+        <div class="row"><span class="k">code</span><span class="v">{{ source.code }}</span></div>
+        <div class="row"><span class="k">name</span><span class="v">{{ source.name }}</span></div>
+        <div class="row"><span class="k">base_url</span><span class="v">{{ source.base_url }}</span></div>
+        <div class="row"><span class="k">is_active</span><span class="v">{{ source.is_active }}</span></div>
+        <div class="row"><span class="k">supports_js_render</span><span class="v">{{ source.supports_js_render }}</span></div>
+        <div class="row"><span class="k">crawl_interval_minutes</span><span class="v">{{ source.crawl_interval_minutes }}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>当前版本</h1></div>
+      {% if current_version %}
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v">{{ current_version.id }}</span></div>
+        <div class="row"><span class="k">notice_id</span><span class="v">{{ current_version.notice_id }}</span></div>
+        <div class="row"><span class="k">version_no</span><span class="v">{{ current_version.version_no }}</span></div>
+        <div class="row"><span class="k">is_current</span><span class="v">{{ current_version.is_current }}</span></div>
+        <div class="row"><span class="k">content_hash</span><span class="v">{{ current_version.content_hash }}</span></div>
+        <div class="row"><span class="k">notice_type</span><span class="v">{{ current_version.notice_type }}</span></div>
+        <div class="row"><span class="k">title</span><span class="v">{{ current_version.title }}</span></div>
+        <div class="row"><span class="k">issuer</span><span class="v">{{ current_version.issuer or '-' }}</span></div>
+        <div class="row"><span class="k">region</span><span class="v">{{ current_version.region or '-' }}</span></div>
+        <div class="row"><span class="k">published_at</span><span class="v">{{ current_version.published_at }}</span></div>
+        <div class="row"><span class="k">deadline_at</span><span class="v">{{ current_version.deadline_at }}</span></div>
+        <div class="row"><span class="k">budget_amount</span><span class="v">{{ current_version.budget_amount }} {{ current_version.budget_currency }}</span></div>
+        <div class="row"><span class="k">change_summary</span><span class="v">{{ current_version.change_summary or '-' }}</span></div>
+      </div>
+      {% else %}
+      <div class="row"><span class="v muted">暂无 current_version 数据</span></div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>版本查看器</h1></div>
+      {% if versions %}
+      <form method="get" class="toolbar">
+        <label for="version-id-input">version_id</label>
+        <input id="version-id-input" type="number" name="version_id" min="1" value="{{ selected_version_id or '' }}" />
+        <label for="version-no-input">version_no</label>
+        <input id="version-no-input" type="number" name="version_no" min="1" value="{{ selected_version_no or '' }}" />
+        <button type="submit">查看版本</button>
+        <a href="/admin/notices/{{ notice.id }}">重置</a>
+      </form>
+
+      {% if selected_version %}
+      <div class="grid">
+        <div class="row"><span class="k">id</span><span class="v">{{ selected_version.id }}</span></div>
+        <div class="row"><span class="k">version_no</span><span class="v">{{ selected_version.version_no }}</span></div>
+        <div class="row"><span class="k">is_current</span><span class="v">{{ selected_version.is_current }}</span></div>
+        <div class="row"><span class="k">notice_type</span><span class="v">{{ selected_version.notice_type }}</span></div>
+        <div class="row"><span class="k">title</span><span class="v">{{ selected_version.title }}</span></div>
+        <div class="row"><span class="k">issuer</span><span class="v">{{ selected_version.issuer or '-' }}</span></div>
+        <div class="row"><span class="k">region</span><span class="v">{{ selected_version.region or '-' }}</span></div>
+        <div class="row"><span class="k">published_at</span><span class="v">{{ selected_version.published_at }}</span></div>
+        <div class="row"><span class="k">deadline_at</span><span class="v">{{ selected_version.deadline_at }}</span></div>
+        <div class="row"><span class="k">content_hash</span><span class="v">{{ selected_version.content_hash }}</span></div>
+        <div class="row"><span class="k">raw_document_id</span><span class="v">{{ selected_version.raw_document_id or '-' }}</span></div>
+        <div class="row">
+          <span class="k">raw_document</span>
+          <span class="v">
+            {% if selected_version.raw_document %}
+            id={{ selected_version.raw_document.id }}
+            <a class="link" href="/admin/raw-documents/{{ selected_version.raw_document.id }}">查看详情</a><br />
+            <a class="link" href="/admin/raw-documents?source_code={{ notice.source_code }}&document_type={{ selected_version.raw_document.document_type }}&from_notice_id={{ notice.id }}">同类型列表</a><br />
+            type={{ selected_version.raw_document.document_type }}<br />
+            fetched_at={{ selected_version.raw_document.fetched_at }}<br />
+            storage={{ selected_version.raw_document.storage_uri }}
+            {% elif selected_version.raw_document_id %}
+            raw_document_id={{ selected_version.raw_document_id }}
+            <a class="link" href="/admin/raw-documents/{{ selected_version.raw_document_id }}">查看详情</a>
+            {% else %}
+            -
+            {% endif %}
+          </span>
+        </div>
+      </div>
+      {% else %}
+      <div class="row"><span class="v muted">未匹配到版本数据</span></div>
+      {% endif %}
+      {% else %}
+      <div class="row"><span class="v muted">当前公告暂无历史版本</span></div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>历史版本</h1></div>
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>version_no</th>
+            <th>is_current</th>
+            <th>notice_type</th>
+            <th>published_at</th>
+            <th>deadline_at</th>
+            <th>content_hash</th>
+            <th>raw_document</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in versions %}
+          <tr>
+            <td>{{ item.id }}</td>
+            <td>{{ item.version_no }}</td>
+            <td>{{ item.is_current }}</td>
+            <td>{{ item.notice_type }}</td>
+            <td>{{ item.published_at }}</td>
+            <td>{{ item.deadline_at }}</td>
+            <td>{{ item.content_hash }}</td>
+            <td>
+              {% if item.raw_document %}
+              id={{ item.raw_document.id }}
+              <a class="link" href="/admin/raw-documents/{{ item.raw_document.id }}">查看详情</a><br />
+              <a class="link" href="/admin/raw-documents?source_code={{ notice.source_code }}&document_type={{ item.raw_document.document_type }}&from_notice_id={{ notice.id }}">同类型列表</a><br />
+              type={{ item.raw_document.document_type }}<br />
+              fetched_at={{ item.raw_document.fetched_at }}<br />
+              storage={{ item.raw_document.storage_uri }}
+              {% elif item.raw_document_id %}
+              raw_document_id={{ item.raw_document_id }}
+              <a class="link" href="/admin/raw-documents/{{ item.raw_document_id }}">查看详情</a>
+              {% else %}
+              -
+              {% endif %}
+            </td>
+            <td>
+              <a class="link" href="/admin/notices/{{ notice.id }}?version_id={{ item.id }}">按ID查看</a><br />
+              <a class="link" href="/admin/notices/{{ notice.id }}?version_no={{ item.version_no }}">按序号查看</a>
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not versions %}
+          <tr>
+            <td colspan="9" class="muted">暂无历史版本</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h1>版本附件列表</h1>
+        {% if selected_version %}
+        <span class="muted">当前版本 version_no={{ selected_version.version_no }}，展示 {{ attachments|length }} / {{ all_attachments_count }} 条</span>
+        {% endif %}
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>notice_version_id</th>
+            <th>version_no</th>
+            <th>file_name</th>
+            <th>attachment_type</th>
+            <th>file_url</th>
+            <th>mime_type</th>
+            <th>file_size_bytes</th>
+            <th>storage_uri</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in attachments %}
+          <tr>
+            <td>{{ item.id }}</td>
+            <td>{{ item.notice_version_id or '-' }}</td>
+            <td>{{ item.notice_version_no or '-' }}</td>
+            <td>{{ item.file_name }}</td>
+            <td>{{ item.attachment_type }}</td>
+            <td>{{ item.file_url }}</td>
+            <td>{{ item.mime_type or '-' }}</td>
+            <td>{{ item.file_size_bytes or '-' }}</td>
+            <td>{{ item.storage_uri or '-' }}</td>
+          </tr>
+          {% endfor %}
+          {% if not attachments %}
+          <tr>
+            <td colspan="9" class="muted">暂无附件</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>原始 JSON</h1></div>
+      <pre class="mono" id="raw-json">{{ raw_json | safe }}</pre>
+    </div>
+  </div>
+</body>
+</html>

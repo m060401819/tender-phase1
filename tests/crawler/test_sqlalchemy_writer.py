@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, func, select
 import app.models  # noqa: F401
 from app.db.base import Base
 from app.models import CrawlError, NoticeVersion, RawDocument, SourceSite, TenderAttachment, TenderNotice
+from app.services import CrawlJobService
 from tender_crawler.utils import normalize_url, sha256_text
 from tender_crawler.writers.sqlalchemy_writer import (
     SqlAlchemyErrorWriter,
@@ -562,5 +563,99 @@ def test_attachment_links_raw_document_by_url_hash(tmp_path: Path) -> None:
         attachment = session.scalar(select(TenderAttachment).where(TenderAttachment.url_hash == attachment_url_hash))
         assert attachment is not None
         assert attachment.raw_document_id == raw_document.id
+
+    context.close()
+
+
+def test_sqlalchemy_writer_updates_crawl_job_metrics(tmp_path: Path) -> None:
+    context = _make_context(tmp_path / "crawl_job_metrics.db")
+    service = CrawlJobService(session_factory=context.session_factory)
+    raw_writer = SqlAlchemyRawDocumentWriter(context=context)
+    notice_writer = SqlAlchemyNoticeWriter(context=context)
+    error_writer = SqlAlchemyErrorWriter(context=context)
+
+    job = service.create_job(source_code="src", job_type="manual", triggered_by="pytest")
+    running = service.start_job(job.id)
+    assert running is not None
+    assert running.status == "running"
+
+    raw_writer.write_raw_document(
+        {
+            "source_code": "src",
+            "source_site_name": "Source",
+            "source_site_url": "https://example.com",
+            "crawl_job_id": job.id,
+            "url": "https://example.com/a?b=2&a=1#frag",
+            "content_hash": None,
+            "document_type": "html",
+            "fetched_at": "2026-03-19T08:00:00+00:00",
+            "storage_uri": "raw/1.html",
+            "raw_body": "dup-body",
+            "http_status": 200,
+        }
+    )
+    raw_writer.write_raw_document(
+        {
+            "source_code": "src",
+            "source_site_name": "Source",
+            "source_site_url": "https://example.com",
+            "crawl_job_id": job.id,
+            "url": "https://example.com/a?a=1&b=2",
+            "content_hash": None,
+            "document_type": "html",
+            "fetched_at": "2026-03-19T08:05:00+00:00",
+            "storage_uri": "raw/2.html",
+            "raw_body": "dup-body",
+            "http_status": 200,
+        }
+    )
+
+    notice_writer.write_notice(
+        {
+            "source_code": "src",
+            "source_site_name": "Source",
+            "source_site_url": "https://example.com",
+            "crawl_job_id": job.id,
+            "detail_page_url": "https://example.com/notice/detail?id=9001",
+            "title": "统计回传公告",
+            "notice_type": "announcement",
+        }
+    )
+    notice_writer.write_notice(
+        {
+            "source_code": "src",
+            "source_site_name": "Source",
+            "source_site_url": "https://example.com",
+            "crawl_job_id": job.id,
+            "detail_page_url": "https://example.com/notice/detail?id=9001",
+            "title": "统计回传公告（更新）",
+            "notice_type": "announcement",
+        }
+    )
+
+    error_writer.write_error(
+        {
+            "source_code": "src",
+            "source_site_name": "Source",
+            "source_site_url": "https://example.com",
+            "crawl_job_id": job.id,
+            "stage": "parse",
+            "url": "https://example.com/notice/detail?id=9001",
+            "error_type": "UnitTestMetricsError",
+            "error_message": "test",
+            "traceback": "",
+            "retryable": False,
+            "occurred_at": "2026-03-19T08:06:00+00:00",
+        }
+    )
+
+    finished = service.finish_job(job.id)
+    assert finished is not None
+    assert finished.status == "partial"
+    assert finished.pages_fetched == 2
+    assert finished.documents_saved == 2
+    assert finished.notices_upserted == 2
+    assert finished.error_count == 1
+    assert finished.deduplicated_count >= 2
 
     context.close()

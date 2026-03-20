@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #0f766e;
+      --accent-soft: #ccfbf1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #ecfeff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1300px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .head h1 { margin: 0; font-size: 20px; }
+    .links a {
+      margin-right: 12px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      padding: 14px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f9fafb;
+      padding: 12px;
+    }
+    .metric .k { color: var(--muted); font-size: 12px; margin-bottom: 6px; display: block; }
+    .metric .v {
+      font-size: 28px;
+      line-height: 1.2;
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .metric .chip {
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 11px;
+      color: #0f766e;
+      background: var(--accent-soft);
+      border-radius: 999px;
+      padding: 2px 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    th { background: #f8fafc; font-weight: 600; }
+    .muted { color: var(--muted); }
+    .link {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .head { flex-direction: column; align-items: flex-start; }
+      .grid { grid-template-columns: 1fr; }
+      table { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <h1>系统总览 Dashboard</h1>
+        <div class="links">
+          <a href="/admin/sources">来源管理</a>
+          <a href="/admin/crawl-jobs">任务看板</a>
+          <a href="/admin/notices">公告管理</a>
+          <a href="/admin/raw-documents">原文管理</a>
+          <a href="/admin/crawl-errors">错误管理</a>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="metric">
+          <span class="k">source_count</span>
+          <div class="v">{{ counts.source_count }}</div>
+          <span class="chip">active={{ counts.active_source_count }}</span>
+        </div>
+        <div class="metric">
+          <span class="k">crawl_job_count</span>
+          <div class="v">{{ counts.crawl_job_count }}</div>
+          <span class="chip">running={{ counts.crawl_job_running_count }}</span>
+        </div>
+        <div class="metric">
+          <span class="k">notice_count</span>
+          <div class="v">{{ counts.notice_count }}</div>
+        </div>
+        <div class="metric">
+          <span class="k">raw_document_count</span>
+          <div class="v">{{ counts.raw_document_count }}</div>
+        </div>
+        <div class="metric">
+          <span class="k">crawl_error_count</span>
+          <div class="v">{{ counts.crawl_error_count }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>最近 7 天趋势</h1></div>
+      <table>
+        <thead>
+          <tr>
+            <th>date</th>
+            <th>crawl_jobs</th>
+            <th>notices</th>
+            <th>crawl_errors</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in trend_rows %}
+          <tr>
+            <td>{{ row.date }}</td>
+            <td>{{ row.crawl_job_count }}</td>
+            <td>{{ row.notice_count }}</td>
+            <td>{{ row.crawl_error_count }}</td>
+          </tr>
+          {% endfor %}
+          {% if not trend_rows %}
+          <tr><td colspan="4" class="muted">暂无趋势数据</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>最近失败/部分成功任务</h1></div>
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>source_code</th>
+            <th>status</th>
+            <th>job_type</th>
+            <th>started_at</th>
+            <th>finished_at</th>
+            <th>error_count</th>
+            <th>message</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in recent_failed_or_partial_jobs %}
+          <tr>
+            <td><a class="link" href="/admin/crawl-jobs/{{ item.id }}">{{ item.id }}</a></td>
+            <td>{{ item.source_code }}</td>
+            <td>{{ item.status }}</td>
+            <td>{{ item.job_type }}</td>
+            <td>{{ item.started_at }}</td>
+            <td>{{ item.finished_at }}</td>
+            <td>{{ item.error_count }}</td>
+            <td>{{ item.message or '-' }}</td>
+          </tr>
+          {% endfor %}
+          {% if not recent_failed_or_partial_jobs %}
+          <tr><td colspan="8" class="muted">暂无失败或部分成功任务</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="head"><h1>最近错误事件</h1></div>
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>source_code</th>
+            <th>crawl_job_id</th>
+            <th>stage</th>
+            <th>error_type</th>
+            <th>message</th>
+            <th>created_at</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in recent_crawl_errors %}
+          <tr>
+            <td><a class="link" href="/admin/crawl-errors/{{ item.id }}">{{ item.id }}</a></td>
+            <td>{{ item.source_code }}</td>
+            <td>
+              {% if item.crawl_job_id %}
+              <a class="link" href="/admin/crawl-jobs/{{ item.crawl_job_id }}">{{ item.crawl_job_id }}</a>
+              {% else %}
+              -
+              {% endif %}
+            </td>
+            <td>{{ item.stage }}</td>
+            <td>{{ item.error_type }}</td>
+            <td>{{ item.message }}</td>
+            <td>{{ item.created_at }}</td>
+          </tr>
+          {% endfor %}
+          {% if not recent_crawl_errors %}
+          <tr><td colspan="7" class="muted">暂无错误事件</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
