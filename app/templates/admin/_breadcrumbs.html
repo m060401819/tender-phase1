@@ -1,0 +1,38 @@
+<style>
+  .admin-breadcrumb {
+    margin: 6px 0 12px 0;
+    padding: 0 2px;
+    font-size: 12px;
+    color: #64748b;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+  .admin-breadcrumb a {
+    color: #0f766e;
+    text-decoration: none;
+    font-weight: 700;
+  }
+  .admin-breadcrumb .sep {
+    color: #94a3b8;
+  }
+  .admin-breadcrumb .current {
+    color: #334155;
+    font-weight: 700;
+  }
+</style>
+{% if breadcrumb_items %}
+<div class="admin-breadcrumb">
+  {% for item in breadcrumb_items %}
+  {% if item.url and not loop.last %}
+  <a href="{{ item.url }}">{{ item.label }}</a>
+  {% else %}
+  <span class="{% if loop.last %}current{% endif %}">{{ item.label }}</span>
+  {% endif %}
+  {% if not loop.last %}
+  <span class="sep">/</span>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}

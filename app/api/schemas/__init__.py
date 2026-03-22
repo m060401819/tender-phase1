@@ -5,6 +5,8 @@ from app.api.schemas.crawl_job import (
     CrawlJobListItemResponse,
     CrawlJobListResponse,
     CrawlJobOrderBy,
+    CrawlJobRetryRequest,
+    CrawlJobRetryResponse,
     CrawlJobStatus,
     CrawlJobType,
 )
@@ -19,8 +21,12 @@ from app.api.schemas.notice import (
     RawDocumentSummaryResponse,
 )
 from app.api.schemas.source import (
+    SourceSiteCreateRequest,
     SourceCrawlJobTriggerRequest,
     SourceCrawlJobTriggerResponse,
+    SourceHealthResponse,
+    SourceSchedulePatchRequest,
+    SourceScheduleResponse,
     SourceSitePatchRequest,
     SourceSiteResponse,
 )
@@ -46,11 +52,14 @@ from app.api.schemas.stats import (
     OverviewFailedJobSummaryResponse,
     StatsOverviewResponse,
 )
+from app.api.schemas.settings import HealthRuleConfigPatchRequest, HealthRuleConfigResponse
 
 __all__ = [
     "CrawlJobStatus",
     "CrawlJobType",
     "CrawlJobOrderBy",
+    "CrawlJobRetryRequest",
+    "CrawlJobRetryResponse",
     "CrawlJobListItemResponse",
     "CrawlJobListResponse",
     "CrawlJobDetailResponse",
@@ -78,8 +87,14 @@ __all__ = [
     "OverviewFailedJobSummaryResponse",
     "OverviewCrawlErrorSummaryResponse",
     "StatsOverviewResponse",
+    "HealthRuleConfigResponse",
+    "HealthRuleConfigPatchRequest",
     "SourceSiteResponse",
+    "SourceSiteCreateRequest",
     "SourceSitePatchRequest",
     "SourceCrawlJobTriggerRequest",
     "SourceCrawlJobTriggerResponse",
+    "SourceScheduleResponse",
+    "SourceSchedulePatchRequest",
+    "SourceHealthResponse",
 ]

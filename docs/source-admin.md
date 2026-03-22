@@ -15,6 +15,8 @@
 - `code`
 - `name`
 - `base_url`
+- `official_url`
+- `list_url`
 - `is_active`
 - `supports_js_render`
 - `crawl_interval_minutes`
@@ -34,6 +36,10 @@
 ## 4. PATCH /sources/{code}
 
 用于更新来源最小运行配置，支持字段：
+- `name`
+- `official_url`
+- `list_url`
+- `description`
 - `is_active`
 - `supports_js_render`
 - `crawl_interval_minutes`

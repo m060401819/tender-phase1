@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -19,11 +19,13 @@ class CrawlJob(TimestampMixin, Base):
             name="ck_crawl_job_status",
         ),
         CheckConstraint(
-            "job_type IN ('scheduled', 'manual', 'backfill')",
+            "job_type IN ('scheduled', 'manual', 'backfill', 'manual_retry')",
             name="ck_crawl_job_type",
         ),
+        UniqueConstraint("retry_of_job_id", name="uq_crawl_job_retry_of_job_id"),
         Index("ix_crawl_job_source_started_at", "source_site_id", "started_at"),
         Index("ix_crawl_job_status", "status"),
+        Index("ix_crawl_job_retry_of_job_id", "retry_of_job_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -35,6 +37,11 @@ class CrawlJob(TimestampMixin, Base):
     job_type: Mapped[str] = mapped_column(String(32), nullable=False, default="scheduled", server_default="scheduled")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", server_default="pending")
     triggered_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    retry_of_job_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("crawl_job.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -43,6 +50,18 @@ class CrawlJob(TimestampMixin, Base):
     notices_upserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     deduplicated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    list_items_seen: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    list_items_unique: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    list_items_source_duplicates_skipped: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    detail_pages_fetched: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    records_inserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    records_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    source_duplicates_suppressed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     source_site: Mapped["SourceSite"] = relationship(back_populates="crawl_jobs")

@@ -23,6 +23,7 @@ class AnhuiGgzyZfcgParser(BaseNoticeParser):
         detail_url: str,
         list_page_url: str,
         list_item_title: str,
+        list_item_published_at: str | None = None,
         detail_html: str,
         xmdj_html: str,
         bulletin_html: str,
@@ -43,7 +44,7 @@ class AnhuiGgzyZfcgParser(BaseNoticeParser):
         body_text = self._extract_bulletin_body_text(bulletin_html)
         published_at = self._parse_datetime(
             self._clean_text(bulletin_sel.css("#tsSpan::text").get())
-        )
+        ) or self._parse_datetime(list_item_published_at)
         deadline_at = self._extract_deadline(body_text)
 
         budget_amount = self._extract_budget_amount(body_text, xmdj_map)

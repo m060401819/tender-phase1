@@ -10,9 +10,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.api.endpoints.crawl_errors import get_crawl_error_detail, list_crawl_errors
+from app.api.endpoints.crawl_errors import get_crawl_error_detail
 from app.api.schemas import CrawlErrorStage
 from app.db.session import get_db
+from app.repositories import CrawlErrorRepository
+from app.services import CrawlErrorQueryService, SourceOpsService
 
 router = APIRouter(tags=["admin-crawl-errors"])
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
@@ -29,15 +31,28 @@ def admin_crawl_errors_list(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    payload = list_crawl_errors(
+    service = CrawlErrorQueryService(repository=CrawlErrorRepository(db))
+    payload = service.list_crawl_errors(
         source_code=source_code,
-        stage=stage,
+        stage=stage.value if stage else None,
         crawl_job_id=crawl_job_id,
         error_type=error_type,
         limit=limit,
         offset=offset,
-        db=db,
     )
+    source_summaries = service.list_recent_source_summaries(
+        source_code=source_code,
+        stage=stage.value if stage else None,
+        crawl_job_id=crawl_job_id,
+        error_type=error_type,
+        recent_days=7,
+        limit=10,
+    )
+    summary_source_codes = [item.source_code for item in source_summaries]
+    source_ops_map = {
+        item.source_code: item
+        for item in SourceOpsService(session=db).list_source_ops(recent_hours=24, source_codes=summary_source_codes)
+    }
 
     total = payload.total
     has_prev = offset > 0
@@ -69,6 +84,26 @@ def admin_crawl_errors_list(
         "prev_url": prev_url,
         "next_url": next_url,
         "stage_options": ["fetch", "parse", "persist"],
+        "source_summaries": [
+            {
+                "source_code": item.source_code,
+                "recent_error_count": item.recent_error_count,
+                "latest_error_id": item.latest_error_id,
+                "latest_error_message": item.latest_error_message,
+                "latest_error_created_at": _fmt_datetime(item.latest_error_created_at),
+                "last_retry_status": (
+                    source_ops_map[item.source_code].last_retry_status
+                    if item.source_code in source_ops_map
+                    else None
+                ),
+                "last_retry_job_id": (
+                    source_ops_map[item.source_code].last_retry_job_id
+                    if item.source_code in source_ops_map
+                    else None
+                ),
+            }
+            for item in source_summaries
+        ],
     }
     return TEMPLATES.TemplateResponse(name="admin/crawl_errors_list.html", context=context, request=request)
 
@@ -80,6 +115,7 @@ def admin_crawl_error_detail(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     payload = get_crawl_error_detail(error_id=error_id, db=db)
+    source_ops = SourceOpsService(session=db).get_source_ops(source_code=payload.source_code, recent_hours=24)
 
     error_dict = {
         "id": payload.id,
@@ -96,6 +132,10 @@ def admin_crawl_error_detail(
     context = {
         "request": request,
         "error": error_dict,
+        "latest_retry": {
+            "status": source_ops.last_retry_status if source_ops is not None else None,
+            "job_id": source_ops.last_retry_job_id if source_ops is not None else None,
+        },
         "raw_document": (
             {
                 "id": payload.raw_document.id,

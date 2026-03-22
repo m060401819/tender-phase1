@@ -141,3 +141,194 @@ def test_anhui_spider_emits_crawl_error_when_guid_missing() -> None:
     error = ItemAdapter(emitted[0])
     assert error.get("item_type") == ITEM_TYPE_CRAWL_ERROR
     assert error.get("error_type") == "MissingGuid"
+
+
+def test_anhui_spider_pagination_fetches_until_last_page_with_run_dedup() -> None:
+    spider = AnhuiGgzyZfcgSpider(max_pages=10)
+
+    page1 = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1",
+        body="""
+        <html><body>
+          <input id="currentPage" value="1" />
+          <div class="gcxxfy"><a>1</a><a>2</a><a>3</a><a href="javascript:void(0);" onclick="pagination(1+1);return false;">下一页</a></div>
+          <ul>
+            <li>2026-03-20 <a href="/zfcg/newDetail?guid=guid-1">【合肥】公告A</a></li>
+            <li>2026-03-20 <a href="/zfcg/newDetail?guid=guid-1">【合肥】公告A</a></li>
+            <li>2026-03-20 <a href="/zfcg/newDetail?guid=guid-2">【芜湖】公告B</a></li>
+          </ul>
+        </body></html>
+        """,
+    )
+    emitted_page1 = list(spider.parse(page1))
+    requests_page1 = [x for x in emitted_page1 if isinstance(x, Request) and "newDetail?guid" in x.url]
+    assert {req.url for req in requests_page1} == {
+        "https://ggzy.ah.gov.cn/zfcg/newDetail?guid=guid-1",
+        "https://ggzy.ah.gov.cn/zfcg/newDetail?guid=guid-2",
+    }
+    next_page_req1 = next(x for x in emitted_page1 if isinstance(x, FormRequest))
+    next_form1 = parse_qs(next_page_req1.body.decode("utf-8"))
+    assert next_form1["currentPage"] == ["2"]
+
+    page1_raw = next(item for item in emitted_page1 if not isinstance(item, Request) and ItemAdapter(item).get("item_type") == ITEM_TYPE_RAW_DOCUMENT)
+    page1_meta = ItemAdapter(page1_raw).get("extra_meta")
+    assert page1_meta["page_item_count"] == 3
+    assert page1_meta["new_unique_item_count"] == 2
+    assert page1_meta["page_source_duplicates_skipped"] == 1
+
+    page2 = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=2",
+        body="""
+        <html><body>
+          <input id="currentPage" value="2" />
+          <div class="gcxxfy"><a>1</a><a>2</a><a>3</a><a href="javascript:void(0);" onclick="pagination(2+1);return false;">下一页</a></div>
+          <ul>
+            <li>2026-03-20 <a href="/zfcg/newDetail?guid=guid-2">【芜湖】公告B</a></li>
+            <li>2026-03-21 <a href="/zfcg/newDetail?guid=guid-3">【合肥】公告C</a></li>
+          </ul>
+        </body></html>
+        """,
+    )
+    emitted_page2 = list(spider.parse(page2))
+    requests_page2 = [x for x in emitted_page2 if isinstance(x, Request) and "newDetail?guid" in x.url]
+    assert len(requests_page2) == 1
+    assert requests_page2[0].url.endswith("guid=guid-3")
+    next_page_req2 = next(x for x in emitted_page2 if isinstance(x, FormRequest))
+    next_form2 = parse_qs(next_page_req2.body.decode("utf-8"))
+    assert next_form2["currentPage"] == ["3"]
+
+    page3 = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=3",
+        body="""
+        <html><body>
+          <input id="currentPage" value="3" />
+          <div class="gcxxfy"><a>1</a><a>2</a><a>3</a></div>
+          <ul>
+            <li>2026-03-21 <a href="/zfcg/newDetail?guid=guid-3">【合肥】公告C</a></li>
+          </ul>
+        </body></html>
+        """,
+    )
+    emitted_page3 = list(spider.parse(page3))
+    assert not any(isinstance(x, FormRequest) for x in emitted_page3)
+    assert not any(isinstance(x, Request) and "newDetail?guid" in x.url for x in emitted_page3)
+
+    assert spider.list_items_seen == 6
+    assert spider.list_items_unique == 3
+    assert spider.list_items_source_duplicates_skipped == 3
+
+
+def test_anhui_spider_respects_max_pages() -> None:
+    spider = AnhuiGgzyZfcgSpider(max_pages=2)
+
+    page1 = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1",
+        body="""
+        <html><body>
+          <input id="currentPage" value="1" />
+          <div class="gcxxfy"><a>1</a><a>2</a><a>3</a><a href="javascript:void(0);" onclick="pagination(2);return false;">下一页</a></div>
+          <a href="/zfcg/newDetail?guid=guid-1">公告1</a>
+        </body></html>
+        """,
+    )
+    emitted_page1 = list(spider.parse(page1))
+    assert any(isinstance(x, FormRequest) for x in emitted_page1)
+
+    page2 = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=2",
+        body="""
+        <html><body>
+          <input id="currentPage" value="2" />
+          <div class="gcxxfy"><a>1</a><a>2</a><a>3</a><a href="javascript:void(0);" onclick="pagination(3);return false;">下一页</a></div>
+          <a href="/zfcg/newDetail?guid=guid-2">公告2</a>
+        </body></html>
+        """,
+    )
+    emitted_page2 = list(spider.parse(page2))
+    assert not any(isinstance(x, FormRequest) for x in emitted_page2)
+
+
+def test_anhui_spider_stops_after_consecutive_empty_pages() -> None:
+    spider = AnhuiGgzyZfcgSpider(max_pages=8, stop_after_consecutive_empty_pages=2)
+
+    page1 = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1",
+        body="""
+        <html><body>
+          <input id="currentPage" value="1" />
+          <div class="gcxxfy"><a>1</a><a>9</a><a href="javascript:void(0);" onclick="pagination(2);return false;">下一页</a></div>
+          <a href="/zfcg/newDetail?guid=guid-1">公告1</a>
+        </body></html>
+        """,
+    )
+    emitted_page1 = list(spider.parse(page1))
+    assert any(isinstance(x, FormRequest) for x in emitted_page1)
+
+    page2 = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=2",
+        body="""
+        <html><body>
+          <input id="currentPage" value="2" />
+          <div class="gcxxfy"><a>1</a><a>9</a><a href="javascript:void(0);" onclick="pagination(3);return false;">下一页</a></div>
+          <a href="/zfcg/newDetail?guid=guid-1">公告1</a>
+        </body></html>
+        """,
+    )
+    emitted_page2 = list(spider.parse(page2))
+    assert any(isinstance(x, FormRequest) for x in emitted_page2)
+
+    page3 = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=3",
+        body="""
+        <html><body>
+          <input id="currentPage" value="3" />
+          <div class="gcxxfy"><a>1</a><a>9</a><a href="javascript:void(0);" onclick="pagination(4);return false;">下一页</a></div>
+          <a href="/zfcg/newDetail?guid=guid-1">公告1</a>
+        </body></html>
+        """,
+    )
+    emitted_page3 = list(spider.parse(page3))
+    assert not any(isinstance(x, FormRequest) for x in emitted_page3)
+
+
+def test_anhui_spider_backfill_stops_when_page_all_older_than_year() -> None:
+    spider = AnhuiGgzyZfcgSpider(backfill_year=2026, max_pages=100)
+
+    older_page = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=&currentPage=120",
+        body="""
+        <html><body>
+          <input id="currentPage" value="120" />
+          <div class="gcxxfy"><a href="javascript:void(0);" onclick="pagination(121);return false;">下一页</a></div>
+          <ul>
+            <li>2025-12-31 <a href="/zfcg/newDetail?guid=old-1">老公告1</a></li>
+            <li>2025-12-30 <a href="/zfcg/newDetail?guid=old-2">老公告2</a></li>
+          </ul>
+        </body></html>
+        """,
+    )
+
+    emitted = list(spider.parse(older_page))
+    assert not any(isinstance(x, Request) and "newDetail?guid" in x.url for x in emitted)
+    assert not any(isinstance(x, FormRequest) for x in emitted)
+    raw_item = next(item for item in emitted if not isinstance(item, Request) and ItemAdapter(item).get("item_type") == ITEM_TYPE_RAW_DOCUMENT)
+    meta = ItemAdapter(raw_item).get("extra_meta")
+    assert meta["all_items_older_than_backfill"] is True
+
+
+def test_anhui_spider_backfill_stops_on_empty_list_page() -> None:
+    spider = AnhuiGgzyZfcgSpider(backfill_year=2026, max_pages=100)
+
+    empty_page = _build_response(
+        url="https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=&currentPage=5",
+        body="""
+        <html><body>
+          <input id="currentPage" value="5" />
+          <div class="gcxxfy"><a href="javascript:void(0);" onclick="pagination(6);return false;">下一页</a></div>
+          <ul></ul>
+        </body></html>
+        """,
+    )
+
+    emitted = list(spider.parse(empty_page))
+    assert not any(isinstance(x, FormRequest) for x in emitted)

@@ -16,6 +16,7 @@ class NoticeType(str, Enum):
 class NoticeListItemResponse(BaseModel):
     id: int
     source_code: str
+    source_name: str | None = None
     title: str
     notice_type: NoticeType
     issuer: str | None
@@ -24,6 +25,8 @@ class NoticeListItemResponse(BaseModel):
     deadline_at: datetime | None
     budget_amount: Decimal | None
     current_version_id: int | None
+    duplicate_count: int = 1
+    is_recent_new: bool = False
 
 
 class NoticeListResponse(BaseModel):

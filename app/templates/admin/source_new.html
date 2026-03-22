@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Create Source Site</title>
+  <style>
+    :root {
+      --bg: #f7fafc;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --text: #0f172a;
+      --muted: #6b7280;
+      --accent: #0f766e;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #ecfeff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 920px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .head h1 { margin: 0; font-size: 20px; }
+    .head a { color: var(--accent); text-decoration: none; font-size: 13px; }
+    form {
+      padding: 16px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    input, select, button {
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    .full { grid-column: 1 / -1; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .error-box {
+      margin: 12px 16px;
+      border: 1px solid #fecaca;
+      background: #fef2f2;
+      color: var(--danger);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+    }
+    .error-box ul {
+      margin: 6px 0 0 16px;
+      padding: 0;
+    }
+    .hint {
+      margin: 0 16px 14px 16px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .mode-box {
+      margin: 12px 16px;
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      color: #1d4ed8;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .mode-box strong { display: block; margin-bottom: 4px; }
+    .code-hint {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #1d4ed8;
+    }
+    .code-hint.warn {
+      color: #b45309;
+    }
+    @media (max-width: 760px) {
+      form { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  {% include "admin/_top_nav.html" %}
+  <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "来源网站列表", "url": "/admin/source-sites"}, {"label": "新增来源网站", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
+    <div class="card">
+      <div class="head">
+        <h1>新增来源网站</h1>
+        <a href="/admin/source-sites">返回来源列表</a>
+      </div>
+      {% if errors %}
+      <div class="error-box">
+        <strong>提交失败，请修正以下问题：</strong>
+        <ul>
+          {% for message in errors %}
+          <li>{{ message }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <div class="mode-box">
+        <strong>A. 仅登记来源</strong>
+        保存来源信息，不创建可抓取能力。
+      </div>
+      <div class="mode-box">
+        <strong>B. 已接入可抓来源</strong>
+        当前已接入：{{ integrated_source_codes | join(", ") }}。这些来源可正常创建抓取任务。
+      </div>
+      <form method="post" action="/admin/sources/new">
+        <div class="field">
+          <label for="source_code">source_code</label>
+          <input id="source_code" name="source_code" value="{{ form.source_code }}" required />
+          <div id="source-code-hint" class="code-hint"></div>
+        </div>
+        <div class="field">
+          <label for="source_name">source_name</label>
+          <input id="source_name" name="source_name" value="{{ form.source_name }}" required />
+        </div>
+        <div class="field full">
+          <label for="official_url">official_url</label>
+          <input id="official_url" name="official_url" type="url" value="{{ form.official_url }}" required />
+        </div>
+        <div class="field full">
+          <label for="list_url">list_url</label>
+          <input id="list_url" name="list_url" type="url" value="{{ form.list_url }}" required />
+        </div>
+        <div class="field">
+          <label for="is_active">is_active</label>
+          <select id="is_active" name="is_active">
+            <option value="true" {% if form.is_active == "true" %}selected{% endif %}>true</option>
+            <option value="false" {% if form.is_active == "false" %}selected{% endif %}>false</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="schedule_enabled">schedule_enabled</label>
+          <select id="schedule_enabled" name="schedule_enabled">
+            <option value="true" {% if form.schedule_enabled == "true" %}selected{% endif %}>true</option>
+            <option value="false" {% if form.schedule_enabled == "false" %}selected{% endif %}>false</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="schedule_days">schedule_days</label>
+          <select id="schedule_days" name="schedule_days">
+            {% for day in schedule_day_options %}
+            <option value="{{ day }}" {% if form.schedule_days == day|string %}selected{% endif %}>{{ day }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="crawl_interval_minutes">crawl_interval_minutes</label>
+          <input id="crawl_interval_minutes" name="crawl_interval_minutes" type="number" min="1" value="{{ form.crawl_interval_minutes }}" />
+        </div>
+        <div class="field">
+          <label for="default_max_pages">default_max_pages（可选）</label>
+          <input id="default_max_pages" name="default_max_pages" type="number" min="1" value="{{ form.default_max_pages }}" />
+        </div>
+        <div class="field full">
+          <label for="remark">remark（可选）</label>
+          <input id="remark" name="remark" value="{{ form.remark }}" />
+        </div>
+        <div class="field full">
+          <button type="submit">保存来源网站</button>
+        </div>
+      </form>
+      <div class="hint">保存成功后会返回来源网站列表，并显示“新增成功”。</div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const integrated = new Set({{ integrated_source_codes | tojson }});
+      const input = document.getElementById("source_code");
+      const hint = document.getElementById("source-code-hint");
+      function updateHint() {
+        const value = (input.value || "").trim();
+        if (!value) {
+          hint.textContent = "请输入 source_code 以识别接入状态。";
+          hint.className = "code-hint";
+          return;
+        }
+        if (integrated.has(value)) {
+          hint.textContent = "已接入可抓来源，可直接创建抓取任务。";
+          hint.className = "code-hint";
+          return;
+        }
+        hint.textContent = "仅保存来源信息，尚未接入抓取逻辑。";
+        hint.className = "code-hint warn";
+      }
+      input.addEventListener("input", updateHint);
+      updateHint();
+    })();
+  </script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from app.repositories import (
     CrawlJobListResult,
     CrawlJobOrderBy,
@@ -21,6 +23,8 @@ class CrawlJobQueryService:
         source_code: str | None,
         status: str | None,
         job_type: str | None,
+        status_in: tuple[str, ...] | None,
+        started_from: datetime | None,
         order_by: CrawlJobOrderBy,
         limit: int,
         offset: int,
@@ -30,6 +34,8 @@ class CrawlJobQueryService:
                 source_code=source_code,
                 status=status,
                 job_type=job_type,
+                status_in=status_in,
+                started_from=started_from,
             ),
             order_by=order_by,
             limit=limit,

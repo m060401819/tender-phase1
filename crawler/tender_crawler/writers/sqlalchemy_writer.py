@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import mimetypes
 from urllib.parse import urlparse, urlsplit, unquote
 
-from sqlalchemy import create_engine, func, select, update
+from sqlalchemy import create_engine, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings as app_settings
@@ -80,6 +80,8 @@ class SqlAlchemyWriterContext:
                     code=source_code,
                     name=source_name or source_code,
                     base_url=source_url or "https://example.com",
+                    official_url=source_url or "https://example.com",
+                    list_url=source_url or "https://example.com",
                     description="auto-created by crawler",
                     is_active=True,
                     supports_js_render=False,
@@ -141,6 +143,8 @@ class SqlAlchemyRawDocumentWriter(BaseRawDocumentWriter):
                     "normalized_url": _as_str(item.get("normalized_url")) or _as_str(item.get("url")) or "",
                     "url_hash": url_hash,
                     "content_hash": content_hash,
+                    "source_duplicate_key": _as_str(item.get("source_duplicate_key")),
+                    "source_list_item_fingerprint": _as_str(item.get("source_list_item_fingerprint")),
                     "document_type": _as_str(item.get("document_type")) or "html",
                     "http_status": _as_int(item.get("http_status")),
                     "mime_type": _as_str(item.get("mime_type")),
@@ -175,12 +179,35 @@ class SqlAlchemyRawDocumentWriter(BaseRawDocumentWriter):
                     existing.is_duplicate_url = True
                     existing.is_duplicate_content = is_dup_content
 
+                role = ""
+                list_items_seen = 0
+                list_items_unique = 0
+                list_items_source_duplicates_skipped = 0
+                detail_pages_fetched = 0
+                extra_meta = payload.get("extra_meta")
+                if isinstance(extra_meta, dict):
+                    role = (_as_str(extra_meta.get("role")) or "").lower()
+                    if role == "list":
+                        list_items_seen = _non_negative_int(extra_meta.get("page_item_count"))
+                        list_items_unique = _non_negative_int(extra_meta.get("new_unique_item_count"))
+                        list_items_source_duplicates_skipped = _non_negative_int(
+                            extra_meta.get("page_source_duplicates_skipped")
+                        )
+                    if role == "detail":
+                        detail_pages_fetched = 1
+
                 self.context.crawl_job_service.record_stats_in_session(
                     session,
                     job_id=_as_int(item.get("crawl_job_id")),
                     pages_fetched=1,
                     documents_saved=1,
                     deduplicated_count=1 if (existing is not None or is_dup_content) else 0,
+                    list_items_seen=list_items_seen,
+                    list_items_unique=list_items_unique,
+                    list_items_source_duplicates_skipped=list_items_source_duplicates_skipped,
+                    detail_pages_fetched=detail_pages_fetched,
+                    records_inserted=1 if existing is None else 0,
+                    records_updated=0 if existing is None else 1,
                 )
 
                 session.commit()
@@ -207,6 +234,28 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     source_url=_as_str(item.get("source_site_url")) or _guess_base_url(item),
                 )
 
+                source_duplicate_key = _as_str(item.get("source_duplicate_key"))
+                dedup_key = _as_str(item.get("dedup_key")) or source_duplicate_key
+                content_hash = _as_str(item.get("content_hash"))
+                if (
+                    content_hash
+                    and _exists_notice_version_with_identity_content(
+                        session,
+                        source_site_id=source_site_id,
+                        dedup_key=dedup_key,
+                        source_duplicate_key=source_duplicate_key,
+                        content_hash=content_hash,
+                    )
+                ):
+                    self.context.crawl_job_service.record_stats_in_session(
+                        session,
+                        job_id=_as_int(item.get("crawl_job_id")),
+                        deduplicated_count=1,
+                        source_duplicates_suppressed=1,
+                    )
+                    session.commit()
+                    return
+
                 notice, notice_created = _resolve_notice(session, source_site_id=source_site_id, item=item)
                 if notice is None:
                     return
@@ -217,6 +266,8 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     job_id=_as_int(item.get("crawl_job_id")),
                     notices_upserted=1,
                     deduplicated_count=0 if notice_created else 1,
+                    records_inserted=1 if notice_created else 0,
+                    records_updated=0 if notice_created else 1,
                 )
                 session.commit()
             except Exception:
@@ -260,6 +311,8 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     version.version_no = _as_int(item.get("version_no")) or 1
                 version.is_current = _as_bool(item.get("is_current"), default=True)
                 version.content_hash = _as_str(item.get("content_hash")) or version.content_hash
+                version.dedup_key = _as_str(item.get("dedup_key")) or _as_str(item.get("source_duplicate_key")) or version.dedup_key
+                version.source_duplicate_key = _as_str(item.get("source_duplicate_key")) or version.source_duplicate_key
                 version.title = _as_str(item.get("title")) or notice.title
                 version.notice_type = _normalize_notice_type(_as_str(item.get("notice_type")) or notice.notice_type)
                 version.issuer = _as_str(item.get("issuer"))
@@ -311,6 +364,8 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     session,
                     job_id=_as_int(item.get("crawl_job_id")),
                     deduplicated_count=0 if version_created else 1,
+                    records_inserted=1 if version_created else 0,
+                    records_updated=0 if version_created else 1,
                 )
 
                 session.commit()
@@ -427,6 +482,8 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                     session,
                     job_id=_as_int(item.get("crawl_job_id")),
                     deduplicated_count=1 if attachment_exists else 0,
+                    records_inserted=0 if attachment_exists else 1,
+                    records_updated=1 if attachment_exists else 0,
                 )
 
                 session.commit()
@@ -483,23 +540,45 @@ class SqlAlchemyErrorWriter(BaseErrorWriter):
 
 def _resolve_notice(session: Session, *, source_site_id: int, item: dict) -> tuple[TenderNotice | None, bool]:
     dedup_hash = _as_str(item.get("dedup_hash") or item.get("notice_dedup_hash"))
+    dedup_key = _as_str(item.get("dedup_key"))
     external_id = _as_str(item.get("external_id") or item.get("notice_external_id"))
+    source_duplicate_key = _as_str(item.get("source_duplicate_key"))
 
     notice = None
     created = False
-    if dedup_hash:
+    if external_id:
+        notice = session.scalar(
+            select(TenderNotice).where(
+                TenderNotice.source_site_id == source_site_id,
+                TenderNotice.external_id == external_id,
+            )
+        )
+    if notice is None and source_duplicate_key:
+        notice = session.scalar(
+            select(TenderNotice).where(
+                TenderNotice.source_site_id == source_site_id,
+                TenderNotice.source_duplicate_key == source_duplicate_key,
+            )
+        )
+    if notice is None and dedup_key:
+        notice = session.scalar(
+            select(TenderNotice).where(
+                TenderNotice.source_site_id == source_site_id,
+                TenderNotice.dedup_key == dedup_key,
+            )
+        )
+    if notice is None and dedup_hash:
         notice = session.scalar(
             select(TenderNotice).where(
                 TenderNotice.source_site_id == source_site_id,
                 TenderNotice.dedup_hash == dedup_hash,
             )
         )
-    if notice is None and external_id:
-        notice = session.scalar(
-            select(TenderNotice).where(
-                TenderNotice.source_site_id == source_site_id,
-                TenderNotice.external_id == external_id,
-            )
+    if notice is None:
+        notice = _find_notice_by_high_similarity(
+            session,
+            source_site_id=source_site_id,
+            item=item,
         )
 
     if notice is None:
@@ -514,6 +593,8 @@ def _resolve_notice(session: Session, *, source_site_id: int, item: dict) -> tup
                 external_id=external_id,
                 project_code=_as_str(item.get("project_code")),
                 dedup_hash=dedup_hash,
+                dedup_key=dedup_key,
+                source_duplicate_key=source_duplicate_key,
                 title=title,
                 notice_type=_normalize_notice_type(_as_str(item.get("notice_type"))),
                 issuer=_as_str(item.get("issuer")),
@@ -535,6 +616,57 @@ def _resolve_notice(session: Session, *, source_site_id: int, item: dict) -> tup
     return notice, created
 
 
+def _find_notice_by_high_similarity(
+    session: Session,
+    *,
+    source_site_id: int,
+    item: dict,
+) -> TenderNotice | None:
+    normalized_title = DEDUP_SERVICE.normalize_title(item.get("title"))
+    normalized_date = DEDUP_SERVICE.normalize_published_date(item.get("published_at"))
+    if not normalized_title or not normalized_date:
+        return None
+
+    day_start = datetime.fromisoformat(f"{normalized_date}T00:00:00+00:00")
+    day_end = day_start + timedelta(days=1)
+    candidates = session.scalars(
+        select(TenderNotice).where(
+            TenderNotice.source_site_id == source_site_id,
+            TenderNotice.published_at.is_not(None),
+            TenderNotice.published_at >= day_start,
+            TenderNotice.published_at < day_end,
+        )
+    ).all()
+    if not candidates:
+        return None
+
+    normalized_issuer = DEDUP_SERVICE.normalize_purchaser_or_publisher(item.get("issuer"))
+    normalized_region = DEDUP_SERVICE.normalize_region(item.get("region"))
+    normalized_budget = DEDUP_SERVICE.normalize_budget_bucket(item.get("budget_amount"))
+    input_signals = [normalized_issuer, normalized_region, normalized_budget]
+    available_signal_count = sum(1 for value in input_signals if value)
+    if available_signal_count == 0:
+        return None
+
+    for candidate in candidates:
+        if DEDUP_SERVICE.normalize_title(candidate.title) != normalized_title:
+            continue
+
+        match_count = 0
+        if normalized_issuer and normalized_issuer == DEDUP_SERVICE.normalize_purchaser_or_publisher(candidate.issuer):
+            match_count += 1
+        if normalized_region and normalized_region == DEDUP_SERVICE.normalize_region(candidate.region):
+            match_count += 1
+        if normalized_budget and normalized_budget == DEDUP_SERVICE.normalize_budget_bucket(candidate.budget_amount):
+            match_count += 1
+
+        if available_signal_count == 1 and match_count == 1:
+            return candidate
+        if available_signal_count >= 2 and match_count >= 2:
+            return candidate
+    return None
+
+
 def _apply_notice_fields(notice: TenderNotice, item: dict) -> None:
     title = _as_str(item.get("title"))
     if title:
@@ -544,6 +676,8 @@ def _apply_notice_fields(notice: TenderNotice, item: dict) -> None:
     notice.external_id = _as_str(item.get("external_id") or item.get("notice_external_id")) or notice.external_id
     notice.project_code = _as_str(item.get("project_code")) or notice.project_code
     notice.dedup_hash = _as_str(item.get("dedup_hash") or item.get("notice_dedup_hash")) or notice.dedup_hash
+    notice.dedup_key = _as_str(item.get("dedup_key")) or _as_str(item.get("source_duplicate_key")) or notice.dedup_key
+    notice.source_duplicate_key = _as_str(item.get("source_duplicate_key")) or notice.source_duplicate_key
     notice.issuer = _as_str(item.get("issuer")) or notice.issuer
     notice.region = _as_str(item.get("region")) or notice.region
 
@@ -621,6 +755,8 @@ def _resolve_notice_version(
             version_no=requested_version_no,
             is_current=_as_bool(item.get("is_current"), default=True),
             content_hash=content_hash,
+            dedup_key=_as_str(item.get("dedup_key")) or _as_str(item.get("source_duplicate_key")),
+            source_duplicate_key=_as_str(item.get("source_duplicate_key")),
             title=title,
             notice_type=_normalize_notice_type(_as_str(item.get("notice_type"))),
             issuer=_as_str(item.get("issuer")),
@@ -637,6 +773,35 @@ def _resolve_notice_version(
     session.flush()
 
     return version, True
+
+
+def _exists_notice_version_with_identity_content(
+    session: Session,
+    *,
+    source_site_id: int,
+    dedup_key: str | None,
+    source_duplicate_key: str | None,
+    content_hash: str,
+) -> bool:
+    key_conditions = []
+    if dedup_key:
+        key_conditions.append(NoticeVersion.dedup_key == dedup_key)
+    if source_duplicate_key:
+        key_conditions.append(NoticeVersion.source_duplicate_key == source_duplicate_key)
+    if not key_conditions:
+        return False
+
+    existing = session.scalar(
+        select(NoticeVersion.id)
+        .join(TenderNotice, TenderNotice.id == NoticeVersion.notice_id)
+        .where(
+            TenderNotice.source_site_id == source_site_id,
+            or_(*key_conditions),
+            NoticeVersion.content_hash == content_hash,
+        )
+        .limit(1)
+    )
+    return existing is not None
 
 
 def _as_str(value: object) -> str | None:
@@ -714,6 +879,13 @@ def _as_bool(value: object, *, default: bool) -> bool:
     if text in {"0", "false", "no", "n"}:
         return False
     return default
+
+
+def _non_negative_int(value: object) -> int:
+    number = _as_int(value)
+    if number is None:
+        return 0
+    return max(0, number)
 
 
 def _normalize_notice_type(value: str | None) -> str:

@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import CrawlError, CrawlJob, RawDocument, SourceSite, TenderNotice
+from app.models import CrawlError, CrawlJob, NoticeVersion, RawDocument, SourceSite, TenderNotice
 
 
 @dataclass(slots=True)
@@ -46,6 +46,8 @@ class StatsOverviewRecord:
     crawl_job_count: int
     crawl_job_running_count: int
     notice_count: int
+    today_new_notice_count: int
+    recent_24h_new_notice_count: int
     raw_document_count: int
     crawl_error_count: int
     recent_7d_crawl_job_counts: list[DailyCountRecord]
@@ -81,6 +83,12 @@ class StatsRepository:
                 or 0
             ),
             notice_count=int(self.session.scalar(select(func.count(TenderNotice.id))) or 0),
+            today_new_notice_count=self._count_recent_notice_updates(
+                start_at=datetime.combine(datetime.now(timezone.utc).date(), time.min, tzinfo=timezone.utc)
+            ),
+            recent_24h_new_notice_count=self._count_recent_notice_updates(
+                start_at=datetime.now(timezone.utc) - timedelta(hours=24)
+            ),
             raw_document_count=int(self.session.scalar(select(func.count(RawDocument.id))) or 0),
             crawl_error_count=int(self.session.scalar(select(func.count(CrawlError.id))) or 0),
             recent_7d_crawl_job_counts=self._get_recent_daily_counts(
@@ -179,6 +187,21 @@ class StatsRepository:
             )
             for error, source_code in rows
         ]
+
+    def _count_recent_notice_updates(self, *, start_at: datetime) -> int:
+        union_subquery = (
+            select(TenderNotice.id.label("notice_id"))
+            .where(TenderNotice.created_at >= start_at)
+            .union(
+                select(NoticeVersion.notice_id.label("notice_id"))
+                .where(
+                    NoticeVersion.notice_id.is_not(None),
+                    NoticeVersion.created_at >= start_at,
+                )
+            )
+            .subquery()
+        )
+        return int(self.session.scalar(select(func.count()).select_from(union_subquery)) or 0)
 
     def _to_iso_date(self, value: object) -> str | None:
         if value is None:

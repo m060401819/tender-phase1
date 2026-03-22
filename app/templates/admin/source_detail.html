@@ -28,6 +28,21 @@
       box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
       margin-bottom: 16px;
     }
+    .notice {
+      border: 1px solid #86efac;
+      background: #f0fdf4;
+      color: #166534;
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .notice.error {
+      border-color: #fecaca;
+      background: #fef2f2;
+      color: #b91c1c;
+    }
     .head {
       padding: 16px 20px;
       border-bottom: 1px solid var(--line);
@@ -38,6 +53,39 @@
     }
     .head h1 { margin: 0; font-size: 20px; }
     .head a { color: var(--accent); text-decoration: none; }
+    .head-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .head-actions form {
+      margin: 0;
+      padding: 0;
+      display: inline-flex;
+    }
+    .head-link {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 13px;
+      color: var(--accent);
+      text-decoration: none;
+      background: #fff;
+      font-weight: 600;
+    }
+    .head-btn-primary {
+      border: 1px solid #15803d;
+      border-radius: 8px;
+      padding: 6px 10px;
+      background: #15803d;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
     .grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -91,6 +139,16 @@
       color: var(--muted);
       font-size: 12px;
     }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .tag-health-normal { background: #dcfce7; color: #166534; }
+    .tag-health-warning { background: #ffedd5; color: #c2410c; }
+    .tag-health-critical { background: #fee2e2; color: #b91c1c; }
     @media (max-width: 720px) {
       .grid { grid-template-columns: 1fr; }
       .row { border-right: none; }
@@ -100,27 +158,111 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "来源网站列表", "url": "/admin/source-sites"}, {"label": "来源详情", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
+    {% if manual_crawl_error %}
+    <div class="notice error">{{ manual_crawl_error }}</div>
+    {% endif %}
     <div class="card">
       <div class="head">
         <h1>来源详情 {{ source.code }}</h1>
-        <div>
-          <a href="/admin/sources">返回来源列表</a>
-          <span style="color:#cbd5e1; margin: 0 6px;">|</span>
-          <a href="/admin/crawl-jobs">任务看板</a>
+        <div class="head-actions">
+          <a class="head-link" href="/admin/source-sites">返回来源列表</a>
+          <a class="head-link" href="/admin/notices?source_code={{ source.code }}">查看招标汇总</a>
+          <a class="head-link" href="/admin/crawl-jobs">任务看板</a>
+          <a class="head-link" href="/admin/settings/health-rules">健康规则</a>
+          <a class="head-link" href="/reports/source-ops.xlsx?recent_hours=24&source_code={{ source.code }}">导出运营日报</a>
+          {% if crawl_supported %}
+          <form method="post" action="/admin/sources/{{ source.code }}/manual-crawl">
+            <button class="head-btn-primary" type="submit">立即手动抓取</button>
+          </form>
+          {% endif %}
         </div>
       </div>
 
       <div class="grid">
         <div class="row"><span class="k">id</span><span class="v">{{ source.id }}</span></div>
         <div class="row"><span class="k">code</span><span class="v">{{ source.code }}</span></div>
+        <div class="row"><span class="k">business_code</span><span class="v">{{ business_code }}</span></div>
+        <div class="row"><span class="k">supported_job_types</span><span class="v">{{ supported_job_types_label }}</span></div>
         <div class="row"><span class="k">name</span><span class="v">{{ source.name }}</span></div>
         <div class="row"><span class="k">base_url</span><span class="v">{{ source.base_url }}</span></div>
+        <div class="row"><span class="k">official_url</span><span class="v">{{ source.official_url }}</span></div>
+        <div class="row"><span class="k">list_url</span><span class="v">{{ source.list_url }}</span></div>
+        <div class="row"><span class="k">crawl_supported</span><span class="v">{{ crawl_supported }}</span></div>
+        <div class="row"><span class="k">crawl_support_message</span><span class="v">{{ crawl_support_message or '-' }}</span></div>
         <div class="row"><span class="k">is_active</span><span class="v">{{ source.is_active }}</span></div>
         <div class="row"><span class="k">supports_js_render</span><span class="v">{{ source.supports_js_render }}</span></div>
         <div class="row"><span class="k">crawl_interval_minutes</span><span class="v">{{ source.crawl_interval_minutes }}</span></div>
         <div class="row"><span class="k">default_max_pages</span><span class="v">{{ source.default_max_pages }}</span></div>
+        <div class="row"><span class="k">schedule_enabled</span><span class="v">{{ source.schedule_enabled }}</span></div>
+        <div class="row"><span class="k">schedule_days</span><span class="v">{{ schedule_days_label }}</span></div>
+        <div class="row"><span class="k">next_scheduled_run_at</span><span class="v">{{ source.next_scheduled_run_at or '-' }}</span></div>
+        <div class="row"><span class="k">last_scheduled_run_at</span><span class="v">{{ source.last_scheduled_run_at or '-' }}</span></div>
+        <div class="row"><span class="k">last_schedule_status</span><span class="v">{{ source.last_schedule_status or '-' }}</span></div>
         <div class="row"><span class="k">description</span><span class="v">{{ source.description or '-' }}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h1>运行健康摘要</h1>
+        <div>
+          <a href="/admin/crawl-jobs?source_code={{ source.code }}&ops_filter=abnormal">查看异常任务</a>
+          <span style="color:#cbd5e1; margin: 0 6px;">|</span>
+          <a href="/admin/crawl-errors?source_code={{ source.code }}">查看错误详情</a>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="row">
+          <span class="k">health_status</span>
+          <span class="v">
+            <span class="tag {% if health_summary.health_status == 'normal' %}tag-health-normal{% elif health_summary.health_status == 'warning' %}tag-health-warning{% else %}tag-health-critical{% endif %}">
+              {{ health_summary.health_status_label }}
+            </span>
+          </span>
+        </div>
+        <div class="row"><span class="k">latest_job_status</span><span class="v">{{ health_summary.latest_job_status_label }}</span></div>
+        <div class="row"><span class="k">latest_job_started_at</span><span class="v">{{ health_summary.latest_job_started_at }}</span></div>
+        <div class="row"><span class="k">latest_notices_upserted</span><span class="v">{{ health_summary.latest_notices_upserted }}</span></div>
+        <div class="row"><span class="k">latest_error_count</span><span class="v">{{ health_summary.latest_error_count }}</span></div>
+        <div class="row"><span class="k">latest_list_items_seen</span><span class="v">{{ health_summary.latest_list_items_seen }}</span></div>
+        <div class="row"><span class="k">latest_list_items_unique</span><span class="v">{{ health_summary.latest_list_items_unique }}</span></div>
+        <div class="row"><span class="k">latest_list_items_source_duplicates_skipped</span><span class="v">{{ health_summary.latest_list_items_source_duplicates_skipped }}</span></div>
+        <div class="row"><span class="k">latest_detail_pages_fetched</span><span class="v">{{ health_summary.latest_detail_pages_fetched }}</span></div>
+        <div class="row"><span class="k">latest_source_duplicates_suppressed</span><span class="v">{{ health_summary.latest_source_duplicates_suppressed }}</span></div>
+        <div class="row"><span class="k">recent_7d_job_count</span><span class="v">{{ health_summary.recent_7d_job_count }}</span></div>
+        <div class="row"><span class="k">recent_7d_failed_count</span><span class="v">{{ health_summary.recent_7d_failed_count }}</span></div>
+        <div class="row"><span class="k">recent_7d_error_count</span><span class="v">{{ health_summary.recent_7d_error_count }}</span></div>
+        <div class="row"><span class="k">latest_failure_reason</span><span class="v">{{ health_summary.latest_failure_reason }}</span></div>
+        <div class="row"><span class="k">today_crawl_job_count</span><span class="v">{{ ops_summary.today_crawl_job_count }}</span></div>
+        <div class="row"><span class="k">today_success_count</span><span class="v">{{ ops_summary.today_success_count }}</span></div>
+        <div class="row"><span class="k">today_failed_count</span><span class="v">{{ ops_summary.today_failed_count }}</span></div>
+        <div class="row"><span class="k">today_partial_count</span><span class="v">{{ ops_summary.today_partial_count }}</span></div>
+        <div class="row"><span class="k">today_new_notice_count</span><span class="v">{{ ops_summary.today_new_notice_count }}</span></div>
+        <div class="row"><span class="k">last_error_message</span><span class="v">{{ ops_summary.last_error_message }}</span></div>
+        <div class="row">
+          <span class="k">last_retry_status</span>
+          <span class="v">
+            {{ ops_summary.last_retry_status }}
+            {% if ops_summary.last_retry_job_id %}
+            （<a href="/admin/crawl-jobs/{{ ops_summary.last_retry_job_id }}">任务 #{{ ops_summary.last_retry_job_id }}</a>）
+            {% endif %}
+          </span>
+        </div>
+        <div class="row"><span class="k">last_job_status</span><span class="v">{{ ops_summary.last_job_status }}</span></div>
+        <div class="row"><span class="k">last_job_finished_at</span><span class="v">{{ ops_summary.last_job_finished_at }}</span></div>
+      </div>
+      <div class="form">
+        <div class="hint">
+          {% if crawl_supported %}
+          可使用顶部“立即手动抓取”按钮创建全新 manual 抓取任务。
+          {% else %}
+          {{ crawl_support_message }}
+          {% endif %}
+        </div>
       </div>
     </div>
 
@@ -130,6 +272,22 @@
       </div>
       <form class="form" method="post" action="/admin/sources/{{ source.code }}/config">
         <div class="form-grid">
+          <div class="field">
+            <label for="source_name">source_name</label>
+            <input id="source_name" name="source_name" value="{{ source.name }}" required />
+          </div>
+          <div class="field">
+            <label for="official_url">official_url</label>
+            <input id="official_url" name="official_url" type="url" value="{{ source.official_url }}" required />
+          </div>
+          <div class="field">
+            <label for="list_url">list_url</label>
+            <input id="list_url" name="list_url" type="url" value="{{ source.list_url }}" required />
+          </div>
+          <div class="field">
+            <label for="description">remark</label>
+            <input id="description" name="description" value="{{ source.description or '' }}" />
+          </div>
           <div class="field">
             <label for="is_active">is_active</label>
             <select id="is_active" name="is_active">
@@ -160,15 +318,70 @@
 
     <div class="card">
       <div class="head">
+        <h1>自动抓取配置</h1>
+      </div>
+      <form class="form" method="post" action="/admin/sources/{{ source.code }}/schedule">
+        {% if schedule_updated %}
+        <div class="notice">配置已更新</div>
+        {% endif %}
+        <div class="form-grid">
+          <div class="field">
+            <label for="schedule_enabled">是否启用自动抓取</label>
+            <select id="schedule_enabled" name="schedule_enabled">
+              <option value="true" {% if source.schedule_enabled %}selected{% endif %}>已启用</option>
+              <option value="false" {% if not source.schedule_enabled %}selected{% endif %}>未启用</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="schedule_days">抓取周期</label>
+            <select id="schedule_days" name="schedule_days">
+              {% for day in schedule_day_options %}
+              <option value="{{ day }}" {% if day == source.schedule_days %}selected{% endif %}>{{ day }}天一次</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <button type="submit">保存自动抓取配置</button>
+        <div class="hint">保存后会立即同步调度计划；若来源停用或未启用自动抓取，则不会创建调度任务。</div>
+        <div class="hint">当前调度摘要：{{ '已启用' if source.schedule_enabled else '未启用' }} / {{ schedule_days_label }} / 下次：{{ source.next_scheduled_run_at or '-' }} / 上次结果：{{ source.last_schedule_status or '-' }}</div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="head">
         <h1>手动触发抓取</h1>
       </div>
+      {% if crawl_supported %}
       <form class="form" method="post" action="/admin/sources/{{ source.code }}/crawl-jobs">
+        <input type="hidden" name="job_type" value="manual" />
         <label for="max_pages">max_pages</label>
         <input id="max_pages" name="max_pages" type="number" min="1" value="{{ source.default_max_pages }}" />
         <button type="submit">触发一次抓取</button>
         <div class="hint">提交后将同步触发 spider，完成后跳转到对应 crawl_job 详情页。</div>
       </form>
+      {% else %}
+      <div class="form">
+        <div class="hint">{{ crawl_support_message }}</div>
+      </div>
+      {% endif %}
     </div>
+
+    {% if supports_backfill %}
+    <div class="card">
+      <div class="head">
+        <h1>按年份回填</h1>
+      </div>
+      <form class="form" method="post" action="/admin/sources/{{ source.code }}/crawl-jobs">
+        <input type="hidden" name="job_type" value="backfill" />
+        <label for="backfill_year">backfill_year</label>
+        <input id="backfill_year" name="backfill_year" type="number" min="2000" max="2100" value="2026" />
+        <label for="backfill_max_pages">max_pages</label>
+        <input id="backfill_max_pages" name="max_pages" type="number" min="1" value="50" />
+        <button type="submit">2026回填</button>
+        <div class="hint">来源详情页点击“2026回填”将创建 backfill 任务并携带 backfill_year=2026。</div>
+      </form>
+    </div>
+    {% endif %}
   </div>
 </body>
 </html>

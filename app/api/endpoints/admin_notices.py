@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.api.endpoints.notices import get_notice_detail, list_notices
+from app.api.endpoints.stats import get_stats_overview
 from app.api.schemas import NoticeType
 from app.db.session import get_db
+from app.repositories import NoticeRepository
+from app.services import NoticeQueryService
 
 router = APIRouter(tags=["admin-notices"])
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
@@ -26,19 +30,61 @@ def admin_notices_list(
     source_code: str | None = Query(default=None),
     notice_type: NoticeType | None = Query(default=None),
     region: str | None = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=200),
+    recent_hours: int | None = Query(default=None, ge=1, le=720),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    dedup: bool = Query(default=True),
+    sort_by: str = Query(default="published_at"),
+    sort_order: str = Query(default="desc"),
+    limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    stats_payload = get_stats_overview(db=db)
+    service = NoticeQueryService(repository=NoticeRepository(db))
     payload = list_notices(
         keyword=keyword,
         source_code=source_code,
         notice_type=notice_type,
         region=region,
+        recent_hours=recent_hours,
+        date_from=date_from,
+        date_to=date_to,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
         limit=limit,
         offset=offset,
         db=db,
     )
+    raw_total = service.list_notices(
+        keyword=keyword,
+        source_code=source_code,
+        notice_type=notice_type.value if notice_type else None,
+        region=region,
+        recent_hours=recent_hours,
+        date_from=date_from,
+        date_to=date_to,
+        dedup=False,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=1,
+        offset=0,
+    ).total
+    dedup_total = service.list_notices(
+        keyword=keyword,
+        source_code=source_code,
+        notice_type=notice_type.value if notice_type else None,
+        region=region,
+        recent_hours=recent_hours,
+        date_from=date_from,
+        date_to=date_to,
+        dedup=True,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=1,
+        offset=0,
+    ).total
 
     total = payload.total
     has_prev = offset > 0
@@ -52,6 +98,12 @@ def admin_notices_list(
         "source_code": source_code,
         "notice_type": notice_type.value if notice_type else None,
         "region": region,
+        "recent_hours": recent_hours,
+        "date_from": date_from.isoformat() if date_from else None,
+        "date_to": date_to.isoformat() if date_to else None,
+        "dedup": None if dedup else "false",
+        "sort_by": sort_by,
+        "sort_order": sort_order,
         "limit": limit,
     }
 
@@ -63,6 +115,12 @@ def admin_notices_list(
         source_code=source_code,
         notice_type=notice_type.value if notice_type else None,
         region=region,
+        recent_hours=recent_hours,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     export_json_url = _notice_export_url(
         ext="json",
@@ -70,9 +128,48 @@ def admin_notices_list(
         source_code=source_code,
         notice_type=notice_type.value if notice_type else None,
         region=region,
+        recent_hours=recent_hours,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    export_xlsx_url = _notice_export_url(
+        ext="xlsx",
+        keyword=keyword,
+        source_code=source_code,
+        notice_type=notice_type.value if notice_type else None,
+        region=region,
+        recent_hours=recent_hours,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
-    notices = [_list_item_to_dict(item) for item in payload.items]
+    notices = [
+        {
+            **_list_item_to_dict(item),
+            "is_recent_new": bool(item.is_recent_new),
+        }
+        for item in payload.items
+    ]
+    recent_toggle_on_url = _admin_list_url(
+        {
+            **common_query,
+            "recent_hours": 24,
+        },
+        0,
+    )
+    recent_toggle_off_url = _admin_list_url(
+        {
+            **common_query,
+            "recent_hours": None,
+        },
+        0,
+    )
 
     context = {
         "request": request,
@@ -81,6 +178,12 @@ def admin_notices_list(
         "source_code": source_code or "",
         "notice_type": notice_type.value if notice_type else "",
         "region": region or "",
+        "recent_hours": recent_hours,
+        "date_from": date_from.isoformat() if date_from else "",
+        "date_to": date_to.isoformat() if date_to else "",
+        "dedup": dedup,
+        "sort_by": sort_by,
+        "sort_order": sort_order,
         "limit": limit,
         "offset": offset,
         "total": total,
@@ -88,6 +191,15 @@ def admin_notices_list(
         "next_url": next_url,
         "export_csv_url": export_csv_url,
         "export_json_url": export_json_url,
+        "export_xlsx_url": export_xlsx_url,
+        "recent_toggle_on_url": recent_toggle_on_url,
+        "recent_toggle_off_url": recent_toggle_off_url,
+        "is_recent_24h_mode": recent_hours == 24,
+        "is_dedup_mode": dedup,
+        "raw_total_count": raw_total,
+        "dedup_total_count": dedup_total,
+        "today_new_notice_count": stats_payload.today_new_notice_count,
+        "recent_24h_new_notice_count": stats_payload.recent_24h_new_notice_count,
         "notice_type_options": ["announcement", "change", "result"],
     }
     return TEMPLATES.TemplateResponse(name="admin/notices_list.html", context=context, request=request)
@@ -219,6 +331,18 @@ def admin_notice_detail(
     )
 
     raw_json = json.dumps(payload.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    related_items = NoticeQueryService(repository=NoticeRepository(db)).list_related_notices(notice_id)
+    related_notices = [
+        {
+            "id": item.id,
+            "source_code": item.source_code,
+            "source_name": item.source_name,
+            "title": item.title,
+            "published_at": _fmt_datetime(item.published_at),
+            "detail_url": item.detail_url,
+        }
+        for item in related_items
+    ]
 
     context = {
         "request": request,
@@ -231,6 +355,8 @@ def admin_notice_detail(
         "versions": versions,
         "attachments": attachments,
         "all_attachments_count": len(all_attachments),
+        "related_notices": related_notices,
+        "related_notice_count": len(related_notices),
         "raw_json": raw_json,
     }
     return TEMPLATES.TemplateResponse(name="admin/notices_detail.html", context=context, request=request)
@@ -250,12 +376,24 @@ def _notice_export_url(
     source_code: str | None,
     notice_type: str | None,
     region: str | None,
+    recent_hours: int | None,
+    date_from: str | None,
+    date_to: str | None,
+    dedup: bool,
+    sort_by: str,
+    sort_order: str,
 ) -> str:
     params = {
         "keyword": keyword,
         "source_code": source_code,
         "notice_type": notice_type,
         "region": region,
+        "recent_hours": recent_hours,
+        "date_from": date_from,
+        "date_to": date_to,
+        "dedup": None if dedup else "false",
+        "sort_by": sort_by,
+        "sort_order": sort_order,
     }
     clean = {k: v for k, v in params.items() if v not in (None, "")}
     query = urlencode(clean)
@@ -268,6 +406,7 @@ def _list_item_to_dict(item: Any) -> dict[str, Any]:
     return {
         "id": item.id,
         "source_code": item.source_code,
+        "source_name": item.source_name,
         "title": item.title,
         "notice_type": item.notice_type,
         "issuer": item.issuer,
@@ -275,6 +414,7 @@ def _list_item_to_dict(item: Any) -> dict[str, Any]:
         "published_at": _fmt_datetime(item.published_at),
         "deadline_at": _fmt_datetime(item.deadline_at),
         "budget_amount": _fmt_decimal(item.budget_amount),
+        "duplicate_count": int(item.duplicate_count),
     }
 
 

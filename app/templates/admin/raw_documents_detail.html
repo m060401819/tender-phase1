@@ -75,7 +75,14 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
+    {% if tender_notice %}
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "招标信息汇总工作台", "url": "/admin/notices"}, {"label": "公告详情", "url": "/admin/notices/" ~ tender_notice.id}, {"label": "原文详情", "url": None}] %}
+    {% else %}
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "原文列表", "url": "/admin/raw-documents"}, {"label": "原文详情", "url": None}] %}
+    {% endif %}
+    {% include "admin/_breadcrumbs.html" %}
     <div class="card">
       <div class="head">
         <h1>原始文档详情 #{{ raw_document.id }}</h1>

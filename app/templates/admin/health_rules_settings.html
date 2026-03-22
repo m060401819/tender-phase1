@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Health Rule Settings</title>
+  <style>
+    :root {
+      --bg: #f7fafc;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --text: #0f172a;
+      --muted: #6b7280;
+      --accent: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #ecfeff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .head h1 { margin: 0; font-size: 20px; }
+    .head a { color: var(--accent); text-decoration: none; font-size: 13px; }
+    .notice {
+      margin: 12px 16px;
+      border: 1px solid #86efac;
+      background: #f0fdf4;
+      color: #166534;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .explain {
+      margin: 12px 16px;
+      border: 1px solid #bae6fd;
+      background: #f0f9ff;
+      color: #0c4a6e;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    form {
+      padding: 16px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .field label { color: var(--muted); font-size: 12px; }
+    input, select, button {
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    .full { grid-column: 1 / -1; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    @media (max-width: 720px) {
+      form { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  {% include "admin/_top_nav.html" %}
+  <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "健康规则", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
+    <div class="card">
+      <div class="head">
+        <h1>健康度规则配置</h1>
+        <div>
+          <a href="/admin/home">返回首页</a>
+          <span style="color:#cbd5e1; margin:0 6px;">|</span>
+          <a href="/admin/source-sites">来源运营页</a>
+          <span style="color:#cbd5e1; margin:0 6px;">|</span>
+          <a href="/admin/dashboard">总览</a>
+        </div>
+      </div>
+      {% if updated %}
+      <div class="notice">配置已更新</div>
+      {% endif %}
+      <div class="explain">
+        当前健康度按以下最小规则计算：<br />
+        1. 最近7天错误数达到 critical 阈值 -> 异常；达到 warning 阈值 -> 警告。<br />
+        2. 连续失败次数达到 critical 阈值 -> 异常；达到 warning 阈值 -> 警告。<br />
+        3. 当启用 partial 警告时，最近任务为 partial -> 警告。<br />
+        4. 其余情况下，最近任务成功 -> 正常，否则 -> 警告。
+      </div>
+      <form method="post" action="/admin/settings/health-rules">
+        <div class="field">
+          <label for="recent_error_warning_threshold">recent_error_warning_threshold</label>
+          <input id="recent_error_warning_threshold" name="recent_error_warning_threshold" type="number" min="0" value="{{ rules.recent_error_warning_threshold }}" />
+        </div>
+        <div class="field">
+          <label for="recent_error_critical_threshold">recent_error_critical_threshold</label>
+          <input id="recent_error_critical_threshold" name="recent_error_critical_threshold" type="number" min="0" value="{{ rules.recent_error_critical_threshold }}" />
+        </div>
+        <div class="field">
+          <label for="consecutive_failure_warning_threshold">consecutive_failure_warning_threshold</label>
+          <input id="consecutive_failure_warning_threshold" name="consecutive_failure_warning_threshold" type="number" min="0" value="{{ rules.consecutive_failure_warning_threshold }}" />
+        </div>
+        <div class="field">
+          <label for="consecutive_failure_critical_threshold">consecutive_failure_critical_threshold</label>
+          <input id="consecutive_failure_critical_threshold" name="consecutive_failure_critical_threshold" type="number" min="0" value="{{ rules.consecutive_failure_critical_threshold }}" />
+        </div>
+        <div class="field">
+          <label for="partial_warning_enabled">partial_warning_enabled</label>
+          <select id="partial_warning_enabled" name="partial_warning_enabled">
+            <option value="true" {% if rules.partial_warning_enabled %}selected{% endif %}>true</option>
+            <option value="false" {% if not rules.partial_warning_enabled %}selected{% endif %}>false</option>
+          </select>
+        </div>
+        <div class="field full">
+          <button type="submit">保存配置</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, String, cast, func, literal, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import NoticeVersion, RawDocument, SourceSite, TenderAttachment, TenderNotice
+
+NOTICE_SORT_FIELDS = {"published_at", "deadline_at", "budget_amount", "source_name"}
+NOTICE_SORT_ORDERS = {"asc", "desc"}
 
 
 @dataclass(slots=True)
@@ -16,12 +20,16 @@ class NoticeQueryFilters:
     source_code: str | None = None
     notice_type: str | None = None
     region: str | None = None
+    recent_hours: int | None = None
+    date_from: date | None = None
+    date_to: date | None = None
 
 
 @dataclass(slots=True)
 class NoticeListItemRecord:
     id: int
     source_code: str
+    source_name: str
     title: str
     notice_type: str
     issuer: str | None
@@ -30,6 +38,9 @@ class NoticeListItemRecord:
     deadline_at: datetime | None
     budget_amount: Decimal | None
     current_version_id: int | None
+    dedup_key: str
+    duplicate_count: int
+    is_recent_new: bool
 
 
 @dataclass(slots=True)
@@ -38,6 +49,16 @@ class NoticeListResult:
     total: int
     limit: int
     offset: int
+
+
+@dataclass(slots=True)
+class NoticeRelatedRecord:
+    id: int
+    source_code: str
+    source_name: str
+    title: str
+    published_at: datetime | None
+    detail_url: str | None
 
 
 @dataclass(slots=True)
@@ -127,28 +148,50 @@ class NoticeRepository:
         self,
         *,
         filters: NoticeQueryFilters,
+        dedup: bool,
+        sort_by: str,
+        sort_order: str,
         limit: int = 20,
         offset: int = 0,
     ) -> NoticeListResult:
-        base = self._build_list_query(filters)
-        order_by = self._list_order_by()
+        base = self._build_list_query(
+            filters=filters,
+            dedup=dedup,
+        )
+        base_rows = base.subquery("notice_list")
+        order_by = self._build_order_by(base_rows, sort_by=sort_by, sort_order=sort_order)
 
-        total_stmt = select(func.count()).select_from(base.subquery())
+        total_stmt = select(func.count()).select_from(base_rows)
         total = int(self.session.scalar(total_stmt) or 0)
 
         rows = self.session.execute(
-            base.order_by(*order_by)
+            select(base_rows)
+            .order_by(*order_by)
             .limit(limit)
             .offset(offset)
-        ).all()
+        ).mappings().all()
 
-        items = [self._to_list_item(notice=row[0], source_code=row[1]) for row in rows]
+        items = [self._to_list_item(row) for row in rows]
         return NoticeListResult(items=items, total=total, limit=limit, offset=offset)
 
-    def list_notices_for_export(self, *, filters: NoticeQueryFilters) -> list[NoticeListItemRecord]:
-        base = self._build_list_query(filters)
-        rows = self.session.execute(base.order_by(*self._list_order_by())).all()
-        return [self._to_list_item(notice=row[0], source_code=row[1]) for row in rows]
+    def list_notices_for_export(
+        self,
+        *,
+        filters: NoticeQueryFilters,
+        dedup: bool,
+        sort_by: str,
+        sort_order: str,
+    ) -> list[NoticeListItemRecord]:
+        base = self._build_list_query(
+            filters=filters,
+            dedup=dedup,
+        )
+        base_rows = base.subquery("notice_list")
+        rows = self.session.execute(
+            select(base_rows)
+            .order_by(*self._build_order_by(base_rows, sort_by=sort_by, sort_order=sort_order))
+        ).mappings().all()
+        return [self._to_list_item(row) for row in rows]
 
     def get_notice_detail(self, notice_id: int) -> NoticeDetailRecord | None:
         row = self.session.execute(
@@ -198,8 +241,108 @@ class NoticeRepository:
             attachments=attachments,
         )
 
-    def _build_list_query(self, filters: NoticeQueryFilters) -> Select:
-        stmt = select(TenderNotice, SourceSite.code).join(SourceSite, SourceSite.id == TenderNotice.source_site_id)
+    def list_related_notices(self, notice_id: int) -> list[NoticeRelatedRecord]:
+        notice = self.session.scalar(select(TenderNotice).where(TenderNotice.id == notice_id))
+        if notice is None:
+            return []
+
+        dedup_key = self._dedup_key_for_notice(notice)
+        dedup_expr = self._dedup_key_expr()
+        rows = self.session.execute(
+            select(
+                TenderNotice.id.label("id"),
+                SourceSite.code.label("source_code"),
+                SourceSite.name.label("source_name"),
+                TenderNotice.title.label("title"),
+                TenderNotice.published_at.label("published_at"),
+                RawDocument.url.label("detail_url"),
+            )
+            .join(SourceSite, SourceSite.id == TenderNotice.source_site_id)
+            .outerjoin(NoticeVersion, NoticeVersion.id == TenderNotice.current_version_id)
+            .outerjoin(RawDocument, RawDocument.id == NoticeVersion.raw_document_id)
+            .where(dedup_expr == dedup_key)
+            .order_by(
+                TenderNotice.published_at.is_(None),
+                TenderNotice.published_at.desc(),
+                TenderNotice.id.desc(),
+            )
+        ).mappings().all()
+
+        return [
+            NoticeRelatedRecord(
+                id=int(row["id"]),
+                source_code=str(row["source_code"]),
+                source_name=str(row["source_name"]),
+                title=str(row["title"]),
+                published_at=row["published_at"],
+                detail_url=row["detail_url"],
+            )
+            for row in rows
+        ]
+
+    def _build_list_query(
+        self,
+        *,
+        filters: NoticeQueryFilters,
+        dedup: bool,
+    ) -> Select:
+        base_rows = self._build_base_rows_query(filters=filters).subquery("notice_rows")
+        if dedup:
+            ranked_rows = self._build_ranked_rows_query(base_rows).subquery("notice_ranked")
+            return (
+                select(
+                    ranked_rows.c.id,
+                    ranked_rows.c.source_code,
+                    ranked_rows.c.source_name,
+                    ranked_rows.c.title,
+                    ranked_rows.c.notice_type,
+                    ranked_rows.c.issuer,
+                    ranked_rows.c.region,
+                    ranked_rows.c.published_at,
+                    ranked_rows.c.deadline_at,
+                    ranked_rows.c.budget_amount,
+                    ranked_rows.c.current_version_id,
+                    ranked_rows.c.dedup_key,
+                    ranked_rows.c.duplicate_count,
+                    ranked_rows.c.is_recent_new,
+                )
+                .where(ranked_rows.c.row_rank == 1)
+            )
+
+        return select(
+            base_rows.c.id,
+            base_rows.c.source_code,
+            base_rows.c.source_name,
+            base_rows.c.title,
+            base_rows.c.notice_type,
+            base_rows.c.issuer,
+            base_rows.c.region,
+            base_rows.c.published_at,
+            base_rows.c.deadline_at,
+            base_rows.c.budget_amount,
+            base_rows.c.current_version_id,
+            base_rows.c.dedup_key,
+            literal(1).label("duplicate_count"),
+            base_rows.c.is_recent_new,
+        )
+
+    def _build_base_rows_query(self, *, filters: NoticeQueryFilters) -> Select:
+        dedup_key_expr = self._dedup_key_expr()
+        stmt = select(
+            TenderNotice.id.label("id"),
+            SourceSite.code.label("source_code"),
+            SourceSite.name.label("source_name"),
+            TenderNotice.title.label("title"),
+            TenderNotice.notice_type.label("notice_type"),
+            TenderNotice.issuer.label("issuer"),
+            TenderNotice.region.label("region"),
+            TenderNotice.published_at.label("published_at"),
+            TenderNotice.deadline_at.label("deadline_at"),
+            TenderNotice.budget_amount.label("budget_amount"),
+            TenderNotice.current_version_id.label("current_version_id"),
+            dedup_key_expr.label("dedup_key"),
+            self._is_recent_new_expr().label("is_recent_new"),
+        ).join(SourceSite, SourceSite.id == TenderNotice.source_site_id)
 
         normalized_keyword = (filters.keyword or "").strip()
         if normalized_keyword:
@@ -218,14 +361,84 @@ class NoticeRepository:
             stmt = stmt.where(TenderNotice.notice_type == filters.notice_type)
         if filters.region:
             stmt = stmt.where(TenderNotice.region == filters.region)
+        if filters.recent_hours is not None:
+            start_at = datetime.now(timezone.utc) - timedelta(hours=filters.recent_hours)
+            recent_version_exists = (
+                select(NoticeVersion.id)
+                .where(
+                    NoticeVersion.notice_id == TenderNotice.id,
+                    NoticeVersion.created_at >= start_at,
+                )
+                .exists()
+            )
+            stmt = stmt.where(
+                or_(
+                    TenderNotice.created_at >= start_at,
+                    recent_version_exists,
+                )
+            )
+        if filters.date_from is not None:
+            stmt = stmt.where(TenderNotice.published_at >= _to_start_of_day(filters.date_from))
+        if filters.date_to is not None:
+            stmt = stmt.where(TenderNotice.published_at <= _to_end_of_day(filters.date_to))
 
         return stmt
 
-    def _list_order_by(self) -> tuple:
+    def _build_ranked_rows_query(self, base_rows: Any) -> Select:
+        rank_order = (
+            base_rows.c.is_recent_new.desc(),
+            base_rows.c.published_at.is_(None),
+            base_rows.c.published_at.desc(),
+            base_rows.c.id.desc(),
+        )
+        return select(
+            base_rows.c.id,
+            base_rows.c.source_code,
+            base_rows.c.source_name,
+            base_rows.c.title,
+            base_rows.c.notice_type,
+            base_rows.c.issuer,
+            base_rows.c.region,
+            base_rows.c.published_at,
+            base_rows.c.deadline_at,
+            base_rows.c.budget_amount,
+            base_rows.c.current_version_id,
+            base_rows.c.dedup_key,
+            base_rows.c.is_recent_new,
+            func.row_number().over(partition_by=base_rows.c.dedup_key, order_by=rank_order).label("row_rank"),
+            func.count().over(partition_by=base_rows.c.dedup_key).label("duplicate_count"),
+        )
+
+    def _build_order_by(self, table: Any, *, sort_by: str, sort_order: str) -> tuple[Any, ...]:
+        normalized_sort_by = sort_by if sort_by in NOTICE_SORT_FIELDS else "published_at"
+        normalized_sort_order = sort_order if sort_order in NOTICE_SORT_ORDERS else "desc"
+
+        if normalized_sort_by == "deadline_at":
+            column = table.c.deadline_at
+        elif normalized_sort_by == "budget_amount":
+            column = table.c.budget_amount
+        elif normalized_sort_by == "source_name":
+            column = table.c.source_name
+        else:
+            column = table.c.published_at
+
+        if normalized_sort_order == "asc":
+            return (
+                column.is_(None),
+                column.asc(),
+                table.c.id.desc(),
+            )
+        if normalized_sort_by == "published_at":
+            return (
+                table.c.is_recent_new.desc(),
+                column.is_(None),
+                column.desc(),
+                table.c.id.desc(),
+            )
         return (
-            TenderNotice.published_at.is_(None),
-            TenderNotice.published_at.desc(),
-            TenderNotice.id.desc(),
+            column.is_(None),
+            column.desc(),
+            table.c.id.desc(),
         )
 
     def _get_versions(self, notice_id: int) -> list[NoticeVersionRecord]:
@@ -303,18 +516,22 @@ class NoticeRepository:
             for item in rows
         ]
 
-    def _to_list_item(self, *, notice: TenderNotice, source_code: str) -> NoticeListItemRecord:
+    def _to_list_item(self, row: Any) -> NoticeListItemRecord:
         return NoticeListItemRecord(
-            id=int(notice.id),
-            source_code=source_code,
-            title=notice.title,
-            notice_type=notice.notice_type,
-            issuer=notice.issuer,
-            region=notice.region,
-            published_at=notice.published_at,
-            deadline_at=notice.deadline_at,
-            budget_amount=notice.budget_amount,
-            current_version_id=int(notice.current_version_id) if notice.current_version_id is not None else None,
+            id=int(row["id"]),
+            source_code=str(row["source_code"]),
+            source_name=str(row["source_name"]),
+            title=str(row["title"]),
+            notice_type=str(row["notice_type"]),
+            issuer=row["issuer"],
+            region=row["region"],
+            published_at=row["published_at"],
+            deadline_at=row["deadline_at"],
+            budget_amount=row["budget_amount"],
+            current_version_id=int(row["current_version_id"]) if row["current_version_id"] is not None else None,
+            dedup_key=str(row["dedup_key"]),
+            duplicate_count=int(row["duplicate_count"] or 1),
+            is_recent_new=bool(row["is_recent_new"]),
         )
 
     def _to_version(
@@ -341,3 +558,59 @@ class NoticeRepository:
             structured_data=version.structured_data,
             raw_document=raw_document,
         )
+
+    def _dedup_key_expr(self):  # type: ignore[no-untyped-def]
+        normalized_dedup_key = func.nullif(func.trim(TenderNotice.dedup_key), "")
+        normalized_source_duplicate_key = func.nullif(func.trim(TenderNotice.source_duplicate_key), "")
+        normalized_hash = func.nullif(func.trim(TenderNotice.dedup_hash), "")
+        fallback = (
+            literal("fallback:")
+            + cast(TenderNotice.source_site_id, String())
+            + literal("|")
+            + func.coalesce(func.trim(TenderNotice.external_id), "")
+            + literal("|")
+            + func.coalesce(func.trim(TenderNotice.project_code), "")
+            + literal("|")
+            + func.coalesce(func.trim(TenderNotice.title), "")
+        )
+        return func.coalesce(normalized_dedup_key, normalized_source_duplicate_key, normalized_hash, fallback)
+
+    def _dedup_key_for_notice(self, notice: TenderNotice) -> str:
+        dedup_key = (notice.dedup_key or "").strip()
+        if dedup_key:
+            return dedup_key
+        source_duplicate_key = (notice.source_duplicate_key or "").strip()
+        if source_duplicate_key:
+            return source_duplicate_key
+        dedup_hash = (notice.dedup_hash or "").strip()
+        if dedup_hash:
+            return dedup_hash
+        return (
+            f"fallback:{int(notice.source_site_id)}|"
+            f"{(notice.external_id or '').strip()}|"
+            f"{(notice.project_code or '').strip()}|"
+            f"{(notice.title or '').strip()}"
+        )
+
+    def _is_recent_new_expr(self):  # type: ignore[no-untyped-def]
+        recent_start_at = datetime.now(timezone.utc) - timedelta(hours=24)
+        recent_version_exists = (
+            select(NoticeVersion.id)
+            .where(
+                NoticeVersion.notice_id == TenderNotice.id,
+                NoticeVersion.created_at >= recent_start_at,
+            )
+            .exists()
+        )
+        return or_(
+            TenderNotice.created_at >= recent_start_at,
+            recent_version_exists,
+        )
+
+
+def _to_start_of_day(day: date) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=timezone.utc)
+
+
+def _to_end_of_day(day: date) -> datetime:
+    return datetime.combine(day, time.max, tzinfo=timezone.utc)

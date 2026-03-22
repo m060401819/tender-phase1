@@ -8,8 +8,9 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import CrawlJob, SourceSite
+from app.services.source_adapter_registry import normalize_source_code
 
-CRAWL_JOB_TYPES = {"manual", "scheduled", "backfill"}
+CRAWL_JOB_TYPES = {"manual", "scheduled", "backfill", "manual_retry"}
 CRAWL_JOB_STATUSES = {"pending", "running", "succeeded", "failed", "partial"}
 CRAWL_JOB_FINAL_STATUSES = {"succeeded", "failed", "partial"}
 
@@ -29,6 +30,7 @@ class CrawlJobSnapshot:
     job_type: str
     status: str
     triggered_by: str | None
+    retry_of_job_id: int | None
     started_at: datetime | None
     finished_at: datetime | None
     pages_fetched: int
@@ -36,6 +38,13 @@ class CrawlJobSnapshot:
     notices_upserted: int
     deduplicated_count: int
     error_count: int
+    list_items_seen: int
+    list_items_unique: int
+    list_items_source_duplicates_skipped: int
+    detail_pages_fetched: int
+    records_inserted: int
+    records_updated: int
+    source_duplicates_suppressed: int
     message: str | None
 
 
@@ -70,6 +79,7 @@ class CrawlJobService:
         source_url: str | None = None,
         job_type: str = "manual",
         triggered_by: str | None = None,
+        retry_of_job_id: int | None = None,
         message: str | None = None,
     ) -> CrawlJobSnapshot:
         with self.session_factory() as session:
@@ -80,6 +90,7 @@ class CrawlJobService:
                 source_url=source_url,
                 job_type=job_type,
                 triggered_by=triggered_by,
+                retry_of_job_id=retry_of_job_id,
                 message=message,
             )
             session.commit()
@@ -108,6 +119,13 @@ class CrawlJobService:
         notices_upserted: int = 0,
         deduplicated_count: int = 0,
         error_count: int = 0,
+        list_items_seen: int = 0,
+        list_items_unique: int = 0,
+        list_items_source_duplicates_skipped: int = 0,
+        detail_pages_fetched: int = 0,
+        records_inserted: int = 0,
+        records_updated: int = 0,
+        source_duplicates_suppressed: int = 0,
     ) -> CrawlJobSnapshot | None:
         with self.session_factory() as session:
             job = self.record_stats_in_session(
@@ -118,6 +136,13 @@ class CrawlJobService:
                 notices_upserted=notices_upserted,
                 deduplicated_count=deduplicated_count,
                 error_count=error_count,
+                list_items_seen=list_items_seen,
+                list_items_unique=list_items_unique,
+                list_items_source_duplicates_skipped=list_items_source_duplicates_skipped,
+                detail_pages_fetched=detail_pages_fetched,
+                records_inserted=records_inserted,
+                records_updated=records_updated,
+                source_duplicates_suppressed=source_duplicates_suppressed,
             )
             if job is None:
                 return None
@@ -161,6 +186,7 @@ class CrawlJobService:
         source_url: str | None = None,
         job_type: str = "manual",
         triggered_by: str | None = None,
+        retry_of_job_id: int | None = None,
         message: str | None = None,
     ) -> CrawlJob:
         normalized_job_type = _normalize_job_type(job_type)
@@ -170,6 +196,11 @@ class CrawlJobService:
             source_name=source_name,
             source_url=source_url,
         )
+        normalized_retry_of_job_id = int(retry_of_job_id) if retry_of_job_id is not None else None
+        if normalized_retry_of_job_id is not None:
+            original_job = session.get(CrawlJob, normalized_retry_of_job_id)
+            if original_job is None:
+                raise ValueError(f"retry_of_job_id not found: {normalized_retry_of_job_id}")
         job = CrawlJob(
             **_model_create_kwargs(
                 session,
@@ -178,6 +209,7 @@ class CrawlJobService:
                 job_type=normalized_job_type,
                 status="pending",
                 triggered_by=_as_str(triggered_by),
+                retry_of_job_id=normalized_retry_of_job_id,
                 started_at=None,
                 finished_at=None,
                 pages_fetched=0,
@@ -185,6 +217,13 @@ class CrawlJobService:
                 notices_upserted=0,
                 deduplicated_count=0,
                 error_count=0,
+                list_items_seen=0,
+                list_items_unique=0,
+                list_items_source_duplicates_skipped=0,
+                detail_pages_fetched=0,
+                records_inserted=0,
+                records_updated=0,
+                source_duplicates_suppressed=0,
                 message=_as_str(message),
             )
         )
@@ -226,6 +265,13 @@ class CrawlJobService:
         notices_upserted: int = 0,
         deduplicated_count: int = 0,
         error_count: int = 0,
+        list_items_seen: int = 0,
+        list_items_unique: int = 0,
+        list_items_source_duplicates_skipped: int = 0,
+        detail_pages_fetched: int = 0,
+        records_inserted: int = 0,
+        records_updated: int = 0,
+        source_duplicates_suppressed: int = 0,
     ) -> CrawlJob | None:
         if job_id is None:
             return None
@@ -236,6 +282,22 @@ class CrawlJobService:
             "notices_upserted": _normalize_non_negative_delta(notices_upserted, field_name="notices_upserted"),
             "deduplicated_count": _normalize_non_negative_delta(deduplicated_count, field_name="deduplicated_count"),
             "error_count": _normalize_non_negative_delta(error_count, field_name="error_count"),
+            "list_items_seen": _normalize_non_negative_delta(list_items_seen, field_name="list_items_seen"),
+            "list_items_unique": _normalize_non_negative_delta(list_items_unique, field_name="list_items_unique"),
+            "list_items_source_duplicates_skipped": _normalize_non_negative_delta(
+                list_items_source_duplicates_skipped,
+                field_name="list_items_source_duplicates_skipped",
+            ),
+            "detail_pages_fetched": _normalize_non_negative_delta(
+                detail_pages_fetched,
+                field_name="detail_pages_fetched",
+            ),
+            "records_inserted": _normalize_non_negative_delta(records_inserted, field_name="records_inserted"),
+            "records_updated": _normalize_non_negative_delta(records_updated, field_name="records_updated"),
+            "source_duplicates_suppressed": _normalize_non_negative_delta(
+                source_duplicates_suppressed,
+                field_name="source_duplicates_suppressed",
+            ),
         }
         if not any(deltas.values()):
             return session.get(CrawlJob, job_id)
@@ -249,6 +311,13 @@ class CrawlJobService:
         job.notices_upserted += deltas["notices_upserted"]
         job.deduplicated_count += deltas["deduplicated_count"]
         job.error_count += deltas["error_count"]
+        job.list_items_seen += deltas["list_items_seen"]
+        job.list_items_unique += deltas["list_items_unique"]
+        job.list_items_source_duplicates_skipped += deltas["list_items_source_duplicates_skipped"]
+        job.detail_pages_fetched += deltas["detail_pages_fetched"]
+        job.records_inserted += deltas["records_inserted"]
+        job.records_updated += deltas["records_updated"]
+        job.source_duplicates_suppressed += deltas["source_duplicates_suppressed"]
         return job
 
     def finish_job_in_session(
@@ -292,12 +361,33 @@ def _ensure_source_site(
     source_name: str | None,
     source_url: str | None,
 ) -> SourceSite:
-    code = _as_str(source_code)
-    if not code:
+    raw_code = _as_str(source_code)
+    if not raw_code:
         raise ValueError("source_code is required")
+    code = normalize_source_code(raw_code)
 
     source = session.scalar(select(SourceSite).where(SourceSite.code == code))
+    if source is None and raw_code != code:
+        source = session.scalar(select(SourceSite).where(SourceSite.code == raw_code))
+    if source is None and code == "ggzy_gov_cn_deal":
+        source = session.scalar(
+            select(SourceSite)
+            .where(SourceSite.code.in_(["2", "ggzy_gov_cn"]))
+            .order_by(SourceSite.id.asc())
+            .limit(1)
+        )
+        if source is None:
+            source = session.scalar(
+                select(SourceSite)
+                .where(SourceSite.name.like("%全国公共资源交易平台%"))
+                .order_by(SourceSite.id.asc())
+                .limit(1)
+            )
     if source is not None:
+        if source.code != code:
+            existing_target = session.scalar(select(SourceSite.id).where(SourceSite.code == code))
+            if existing_target is None:
+                source.code = code
         return source
 
     source = SourceSite(
@@ -307,6 +397,8 @@ def _ensure_source_site(
             code=code,
             name=_as_str(source_name) or code,
             base_url=_as_str(source_url) or "https://example.com",
+            official_url=_as_str(source_url) or "https://example.com",
+            list_url=_as_str(source_url) or "https://example.com",
             description="auto-created by crawl job service",
             is_active=True,
             supports_js_render=False,
@@ -357,6 +449,7 @@ def _snapshot(job: CrawlJob) -> CrawlJobSnapshot:
         job_type=job.job_type,
         status=job.status,
         triggered_by=job.triggered_by,
+        retry_of_job_id=int(job.retry_of_job_id) if job.retry_of_job_id is not None else None,
         started_at=job.started_at,
         finished_at=job.finished_at,
         pages_fetched=int(job.pages_fetched or 0),
@@ -364,6 +457,13 @@ def _snapshot(job: CrawlJob) -> CrawlJobSnapshot:
         notices_upserted=int(job.notices_upserted or 0),
         deduplicated_count=int(job.deduplicated_count or 0),
         error_count=int(job.error_count or 0),
+        list_items_seen=int(job.list_items_seen or 0),
+        list_items_unique=int(job.list_items_unique or 0),
+        list_items_source_duplicates_skipped=int(job.list_items_source_duplicates_skipped or 0),
+        detail_pages_fetched=int(job.detail_pages_fetched or 0),
+        records_inserted=int(job.records_inserted or 0),
+        records_updated=int(job.records_updated or 0),
+        source_duplicates_suppressed=int(job.source_duplicates_suppressed or 0),
         message=job.message,
     )
 

@@ -3,184 +3,449 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Notices Admin</title>
+  <title>Notice Workbench</title>
   <style>
     :root {
-      --bg: #f7f8fb;
+      --bg: #f3f6fb;
       --card: #ffffff;
-      --text: #1f2937;
-      --muted: #6b7280;
-      --line: #e5e7eb;
+      --line: #d6deea;
+      --text: #15263f;
+      --muted: #5d6b7f;
       --accent: #0f766e;
-      --accent-soft: #ccfbf1;
+      --accent-soft: #d8f6f2;
+      --warn-soft: #fff3d6;
+      --warn-text: #9a3412;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: linear-gradient(180deg, #eef2ff 0%, var(--bg) 100%);
+      font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
       color: var(--text);
+      background:
+        radial-gradient(circle at 15% 0%, #dbeafe 0%, rgba(219, 234, 254, 0) 35%),
+        radial-gradient(circle at 85% 15%, #dcfce7 0%, rgba(220, 252, 231, 0) 35%),
+        var(--bg);
     }
-    .wrap { max-width: 1380px; margin: 24px auto; padding: 0 16px; }
-    .card {
+    .wrap { max-width: 1520px; margin: 22px auto; padding: 0 16px; }
+    .panel {
       background: var(--card);
       border: 1px solid var(--line);
-      border-radius: 14px;
-      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
-      margin-bottom: 16px;
+      border-radius: 16px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
       overflow: hidden;
     }
     .head {
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--line);
       display: flex;
       justify-content: space-between;
-      gap: 12px;
       align-items: center;
-    }
-    h1 { margin: 0; font-size: 20px; }
-    .meta { color: var(--muted); font-size: 13px; }
-    .links a {
-      color: var(--accent);
-      text-decoration: none;
-      font-weight: 600;
-      margin-left: 14px;
-    }
-    form {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 10px;
+      gap: 12px;
       padding: 16px 20px;
       border-bottom: 1px solid var(--line);
-      background: #f9fafb;
+      background: linear-gradient(90deg, #f8fbff 0%, #f4fbf9 100%);
     }
-    input, select, button {
-      width: 100%;
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
+    h1 { margin: 0; font-size: 22px; }
+    .sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .btn,
+    .btn-link {
+      display: inline-block;
+      padding: 7px 12px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .btn-link {
+      color: var(--accent);
+      border-color: #99d9cf;
+      background: #eefdfa;
+    }
+    .btn-link.xl {
+      background: #ecfdf3;
+      border-color: #86efac;
+      color: #166534;
+    }
+    .alert {
+      margin: 12px 20px;
+      border: 1px solid #fcd34d;
+      background: linear-gradient(90deg, #fff7d6 0%, #fef3c7 100%);
+      color: #92400e;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .alert.calm {
+      border-color: #bfdbfe;
+      background: linear-gradient(90deg, #eff6ff 0%, #dbeafe 100%);
+      color: #1d4ed8;
+    }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      padding: 12px 20px 6px 20px;
+    }
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #f8fafc;
+    }
+    .kpi .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .kpi .value {
+      font-size: 20px;
+      font-weight: 800;
+      color: #1f2937;
+    }
+    .mode {
+      margin: 8px 20px 10px 20px;
+      border: 1px solid #93c5fd;
+      background: #eff6ff;
+      color: #1e40af;
+      border-radius: 10px;
       padding: 8px 10px;
-      font-size: 14px;
-      background: #fff;
+      font-size: 13px;
+      font-weight: 700;
     }
-    button {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-      cursor: pointer;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
+    .quick {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px 12px 20px;
+      gap: 10px;
       font-size: 13px;
     }
-    th, td {
-      border-bottom: 1px solid var(--line);
-      padding: 10px 12px;
-      text-align: left;
-      vertical-align: top;
-      word-break: break-word;
+    .quick a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
     }
-    th { background: #f8fafc; font-weight: 600; }
-    .tag {
+    .chip {
       display: inline-block;
-      padding: 2px 8px;
+      padding: 3px 10px;
       border-radius: 999px;
       background: var(--accent-soft);
       color: #0f766e;
+      font-weight: 700;
       font-size: 12px;
-      font-weight: 600;
     }
+    .filters {
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #f8fafc;
+      padding: 14px 20px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      align-items: center;
+    }
+    .filters input,
+    .filters select,
+    .filters button {
+      width: 100%;
+      border: 1px solid #cdd6e3;
+      border-radius: 9px;
+      background: #fff;
+      padding: 8px 10px;
+      font-size: 13px;
+      color: var(--text);
+    }
+    .filters .go {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .filters .reset {
+      text-align: center;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      color: #374151;
+      border: 1px solid #cdd6e3;
+      border-radius: 9px;
+      padding: 8px 10px;
+      background: #fff;
+    }
+    .table-wrap {
+      max-height: 62vh;
+      overflow: auto;
+      border-bottom: 1px solid var(--line);
+    }
+    table {
+      width: 100%;
+      min-width: 1180px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #edf3fb;
+      color: #1f3656;
+      font-weight: 700;
+    }
+    tr.row-recent td { background: #fffbeb; }
+    .title-main {
+      font-weight: 700;
+      line-height: 1.35;
+      margin-bottom: 3px;
+    }
+    .title-sub {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .tag {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .tag-type {
+      background: #e0ecff;
+      color: #1d4ed8;
+    }
+    .tag-new {
+      background: var(--warn-soft);
+      color: var(--warn-text);
+    }
+    .tag-normal {
+      background: #eceff4;
+      color: #475569;
+    }
+    .detail-link {
+      color: var(--accent);
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .muted { color: var(--muted); }
     .pager {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 10px;
       padding: 12px 16px;
+      font-size: 13px;
     }
     .pager a {
       color: var(--accent);
       text-decoration: none;
-      font-weight: 600;
+      font-weight: 700;
     }
-    .muted { color: var(--muted); }
-    .actions a { color: var(--accent); text-decoration: none; }
+    .filter-state {
+      padding: 10px 20px 2px 20px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    .filter-state strong {
+      color: #1f2937;
+    }
 
-    @media (max-width: 1200px) {
-      form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    @media (max-width: 1260px) {
+      .filters {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
     }
-    @media (max-width: 720px) {
-      .head { flex-direction: column; align-items: flex-start; }
-      form { grid-template-columns: 1fr; }
-      table { font-size: 12px; }
+    @media (max-width: 760px) {
+      .head {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .actions {
+        justify-content: flex-start;
+      }
+      .quick {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .filters {
+        grid-template-columns: 1fr;
+      }
+      .kpis {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
-    <div class="card">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "招标信息汇总工作台", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
+    <div class="panel">
       <div class="head">
         <div>
-          <h1>公告列表</h1>
-          <div class="meta">/admin/notices</div>
+          <h1>招标信息汇总工作台</h1>
+          <div class="sub">/admin/notices</div>
         </div>
-        <div class="links">
-          <a href="{{ export_csv_url }}">导出 CSV</a>
-          <a href="{{ export_json_url }}">导出 JSON</a>
+        <div class="actions">
+          <a class="btn-link" href="{{ export_csv_url }}">导出 CSV</a>
+          <a class="btn-link" href="{{ export_json_url }}">导出 JSON</a>
+          <a class="btn-link xl" href="{{ export_xlsx_url }}">导出 Excel</a>
         </div>
       </div>
 
-      <form method="get" action="/admin/notices">
-        <input name="keyword" value="{{ keyword }}" placeholder="keyword (title/issuer/region)" />
-        <input name="source_code" value="{{ source_code }}" placeholder="source_code" />
+      <div class="kpis">
+        <div class="kpi">
+          <div class="label">原始抓取数</div>
+          <div class="value">{{ raw_total_count }}</div>
+        </div>
+        <div class="kpi">
+          <div class="label">去重后数</div>
+          <div class="value">{{ dedup_total_count }}</div>
+        </div>
+        <div class="kpi">
+          <div class="label">最近24小时新增数</div>
+          <div class="value">{{ recent_24h_new_notice_count }}</div>
+        </div>
+      </div>
+
+      <div class="mode">
+        当前展示模式：{% if is_dedup_mode %}去重总展示{% else %}版本明细展示{% endif %}
+      </div>
+
+      {% if recent_24h_new_notice_count > 0 %}
+      <div class="alert">今日新增 {{ today_new_notice_count }} 条，最近24小时新增 {{ recent_24h_new_notice_count }} 条。</div>
+      {% else %}
+      <div class="alert calm">今日新增 0 条，最近24小时暂无新增。</div>
+      {% endif %}
+
+      <div class="quick">
+        {% if is_recent_24h_mode %}
+        <span class="chip">最近24小时新增筛选中</span>
+        <a href="{{ recent_toggle_off_url }}">查看全部</a>
+        {% else %}
+        <span class="chip">默认去重汇总展示</span>
+        <span class="muted">快捷入口：</span>
+        <a href="{{ recent_toggle_on_url }}">仅看最近新增（24小时）</a>
+        {% endif %}
+      </div>
+      <div class="filter-state">
+        <strong>当前条件：</strong>
+        keyword={{ keyword or "-" }} | source_code={{ source_code or "-" }} | notice_type={{ notice_type or "-" }} | region={{ region or "-" }} |
+        recent_hours={{ recent_hours or "-" }} | date_from={{ date_from or "-" }} | date_to={{ date_to or "-" }} |
+        dedup={{ "true" if dedup else "false" }} | sort={{ sort_by }} {{ sort_order }}
+      </div>
+
+      <form class="filters" method="get" action="/admin/notices">
+        <input name="keyword" value="{{ keyword }}" placeholder="关键词（标题/发布方/地区）" />
+        <input name="source_code" value="{{ source_code }}" placeholder="来源编码 source_code" />
 
         <select name="notice_type">
-          <option value="">notice_type: 全部</option>
+          <option value="">公告类型：全部</option>
           {% for option in notice_type_options %}
           <option value="{{ option }}" {% if option == notice_type %}selected{% endif %}>{{ option }}</option>
           {% endfor %}
         </select>
 
-        <input name="region" value="{{ region }}" placeholder="region" />
-        <input type="number" min="1" max="200" name="limit" value="{{ limit }}" placeholder="limit" />
-        <button type="submit">查询</button>
+        <input name="region" value="{{ region }}" placeholder="地区 region" />
+
+        <select name="recent_hours">
+          <option value="" {% if not recent_hours %}selected{% endif %}>最近新增：全部</option>
+          <option value="24" {% if recent_hours == 24 %}selected{% endif %}>最近24小时</option>
+        </select>
+        <input name="date_from" type="date" value="{{ date_from }}" placeholder="date_from" />
+        <input name="date_to" type="date" value="{{ date_to }}" placeholder="date_to" />
+        <select name="dedup">
+          <option value="true" {% if dedup %}selected{% endif %}>去重汇总展示</option>
+          <option value="false" {% if not dedup %}selected{% endif %}>版本明细展示</option>
+        </select>
+        <select name="sort_by">
+          <option value="published_at" {% if sort_by == "published_at" %}selected{% endif %}>发布时间</option>
+          <option value="deadline_at" {% if sort_by == "deadline_at" %}selected{% endif %}>截止日期</option>
+          <option value="budget_amount" {% if sort_by == "budget_amount" %}selected{% endif %}>预算金额</option>
+          <option value="source_name" {% if sort_by == "source_name" %}selected{% endif %}>来源名称</option>
+        </select>
+        <select name="sort_order">
+          <option value="desc" {% if sort_order == "desc" %}selected{% endif %}>desc</option>
+          <option value="asc" {% if sort_order == "asc" %}selected{% endif %}>asc</option>
+        </select>
+
+        <input type="number" min="1" max="200" name="limit" value="{{ limit }}" placeholder="每页条数" />
+
+        <div style="display:flex;gap:8px;">
+          <button class="go" type="submit">查询</button>
+          <a class="reset" href="/admin/notices">重置</a>
+        </div>
       </form>
 
-      <table>
-        <thead>
-          <tr>
-            <th>id</th>
-            <th>source_code</th>
-            <th>title</th>
-            <th>notice_type</th>
-            <th>issuer</th>
-            <th>region</th>
-            <th>published_at</th>
-            <th>deadline_at</th>
-            <th>budget_amount</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in notices %}
-          <tr>
-            <td>{{ item.id }}</td>
-            <td>{{ item.source_code }}</td>
-            <td>{{ item.title }}</td>
-            <td><span class="tag">{{ item.notice_type }}</span></td>
-            <td>{{ item.issuer or '-' }}</td>
-            <td>{{ item.region or '-' }}</td>
-            <td>{{ item.published_at }}</td>
-            <td>{{ item.deadline_at }}</td>
-            <td>{{ item.budget_amount }}</td>
-            <td class="actions"><a href="/admin/notices/{{ item.id }}">详情</a></td>
-          </tr>
-          {% endfor %}
-          {% if not notices %}
-          <tr>
-            <td colspan="10" class="muted">暂无公告记录</td>
-          </tr>
-          {% endif %}
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>标题</th>
+              <th>来源</th>
+              <th>来源名称</th>
+              <th>公告类型</th>
+              <th>地区</th>
+              <th>发布日期</th>
+              <th>截止日期</th>
+              <th>预算金额</th>
+              <th>最近新增</th>
+              <th>重复项数</th>
+              <th>版本/重复项</th>
+              <th>详情</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in notices %}
+            <tr class="{% if item.is_recent_new %}row-recent{% endif %}">
+              <td>
+                <div class="title-main">{{ item.title }}</div>
+                <div class="title-sub">发布方：{{ item.issuer or '-' }}</div>
+              </td>
+              <td>{{ item.source_code }}</td>
+              <td>{{ item.source_name }}</td>
+              <td><span class="tag tag-type">{{ item.notice_type }}</span></td>
+              <td>{{ item.region or '-' }}</td>
+              <td>{{ item.published_at }}</td>
+              <td>{{ item.deadline_at }}</td>
+              <td>{{ item.budget_amount }}</td>
+              <td>
+                {% if item.is_recent_new %}
+                <span class="tag tag-new">最近新增</span>
+                {% else %}
+                <span class="tag tag-normal">常规</span>
+                {% endif %}
+              </td>
+              <td>{{ item.duplicate_count }}</td>
+              <td><a class="detail-link" href="/admin/notices/{{ item.id }}">查看版本/重复项</a></td>
+              <td><a class="detail-link" href="/admin/notices/{{ item.id }}">查看详情</a></td>
+            </tr>
+            {% endfor %}
+            {% if not notices %}
+            <tr>
+              <td colspan="12" class="muted">暂无公告记录</td>
+            </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
 
       <div class="pager">
         <div class="muted">total={{ total }} | limit={{ limit }} | offset={{ offset }}</div>

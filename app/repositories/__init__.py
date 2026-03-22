@@ -8,10 +8,13 @@ from app.repositories.crawl_job_repository import (
     CrawlJobRepository,
 )
 from app.repositories.notice_repository import (
+    NOTICE_SORT_FIELDS,
+    NOTICE_SORT_ORDERS,
     NoticeDetailRecord,
     NoticeListItemRecord,
     NoticeListResult,
     NoticeQueryFilters,
+    NoticeRelatedRecord,
     NoticeRepository,
     NoticeVersionRecord,
     RawDocumentSummaryRecord,
@@ -40,6 +43,7 @@ from app.repositories.crawl_error_repository import (
     CrawlErrorQueryFilters,
     CrawlErrorRawDocumentSummaryRecord,
     CrawlErrorRepository,
+    CrawlErrorSourceSummaryRecord,
 )
 from app.repositories.stats_repository import (
     DailyCountRecord,
@@ -56,8 +60,11 @@ __all__ = [
     "CrawlJobListResult",
     "CrawlJobRepository",
     "NoticeQueryFilters",
+    "NoticeRelatedRecord",
     "NoticeListItemRecord",
     "NoticeListResult",
+    "NOTICE_SORT_FIELDS",
+    "NOTICE_SORT_ORDERS",
     "NoticeVersionRecord",
     "RawDocumentSummaryRecord",
     "TenderAttachmentRecord",
@@ -78,6 +85,7 @@ __all__ = [
     "CrawlErrorListItemRecord",
     "CrawlErrorListResult",
     "CrawlErrorDetailRecord",
+    "CrawlErrorSourceSummaryRecord",
     "CrawlErrorRepository",
     "DailyCountRecord",
     "RecentJobSummaryRecord",

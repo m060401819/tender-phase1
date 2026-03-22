@@ -38,6 +38,8 @@ class StatsOverviewResponse(BaseModel):
     crawl_job_count: int
     crawl_job_running_count: int
     notice_count: int
+    today_new_notice_count: int
+    recent_24h_new_notice_count: int
     raw_document_count: int
     crawl_error_count: int
     recent_7d_crawl_job_counts: list[DailyCountResponse] = Field(default_factory=list)

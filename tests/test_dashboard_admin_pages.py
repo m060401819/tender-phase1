@@ -235,10 +235,13 @@ def test_admin_dashboard_page_shows_counts_trends_links_and_recent_items(tmp_pat
         assert "source_count" in response.text
         assert "crawl_job_count" in response.text
         assert "notice_count" in response.text
+        assert "today_new_notice_count" in response.text
+        assert "recent_24h_new_notice_count" in response.text
         assert "raw_document_count" in response.text
         assert "crawl_error_count" in response.text
         assert "active=1" in response.text
         assert "running=1" in response.text
+        assert "最近24小时新增" in response.text
 
         assert "最近 7 天趋势" in response.text
         assert "最近失败/部分成功任务" in response.text

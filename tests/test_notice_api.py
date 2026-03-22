@@ -4,10 +4,11 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -80,6 +81,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededNotices:
             first_published_at=now - timedelta(days=2),
             latest_published_at=now - timedelta(days=1, hours=20),
             current_version_id=None,
+            created_at=now - timedelta(days=2),
+            updated_at=now - timedelta(days=2),
         )
         notice_2 = TenderNotice(
             id=102,
@@ -99,6 +102,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededNotices:
             first_published_at=now - timedelta(days=1),
             latest_published_at=now - timedelta(days=1),
             current_version_id=None,
+            created_at=now - timedelta(hours=30),
+            updated_at=now - timedelta(hours=30),
         )
         notice_3 = TenderNotice(
             id=103,
@@ -118,6 +123,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededNotices:
             first_published_at=now - timedelta(days=3),
             latest_published_at=now - timedelta(days=3),
             current_version_id=None,
+            created_at=now - timedelta(days=3),
+            updated_at=now - timedelta(days=3),
         )
         notice_4 = TenderNotice(
             id=104,
@@ -137,6 +144,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededNotices:
             first_published_at=None,
             latest_published_at=None,
             current_version_id=None,
+            created_at=now - timedelta(hours=4),
+            updated_at=now - timedelta(hours=4),
         )
         session.add_all([notice_1, notice_2, notice_3, notice_4])
 
@@ -199,6 +208,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededNotices:
             budget_currency="CNY",
             structured_data={"source": "anhui", "version": 1},
             change_summary=None,
+            created_at=now - timedelta(days=2),
+            updated_at=now - timedelta(days=2),
         )
         version_1_current = NoticeVersion(
             id=204,
@@ -217,6 +228,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededNotices:
             budget_currency="CNY",
             structured_data={"source": "anhui", "version": 2},
             change_summary="补充参数",
+            created_at=now - timedelta(hours=3),
+            updated_at=now - timedelta(hours=3),
         )
         version_2 = NoticeVersion(
             id=202,
@@ -235,6 +248,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededNotices:
             budget_currency="CNY",
             structured_data={"source": "anhui", "version": 1},
             change_summary=None,
+            created_at=now - timedelta(hours=36),
+            updated_at=now - timedelta(hours=36),
         )
         version_3 = NoticeVersion(
             id=203,
@@ -253,6 +268,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededNotices:
             budget_currency="CNY",
             structured_data={"source": "example", "version": 2},
             change_summary="补充技术参数",
+            created_at=now - timedelta(days=3),
+            updated_at=now - timedelta(days=3),
         )
         session.add_all([version_1_old, version_1_current, version_2, version_3])
 
@@ -352,6 +369,36 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, SeededNotices, object]:
     return client, seeded, engine
 
 
+def _insert_cross_source_duplicate_notice(engine: object) -> int:
+    now = datetime.now(timezone.utc)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    with session_factory() as session:
+        duplicate_notice = TenderNotice(
+            id=105,
+            source_site_id=2,
+            external_id="EX-DUP-001",
+            project_code="DUP-001",
+            dedup_hash="dedup-ah-001",
+            title="低压透明化改造项目公告（跨来源重复）",
+            notice_type="announcement",
+            issuer="华东采购中心",
+            region="合肥",
+            published_at=now,
+            deadline_at=now + timedelta(days=8),
+            budget_amount=Decimal("900000.00"),
+            budget_currency="CNY",
+            summary="cross source duplicate",
+            first_published_at=now,
+            latest_published_at=now,
+            current_version_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(duplicate_notice)
+        session.commit()
+        return int(duplicate_notice.id)
+
+
 
 def test_notices_list_supports_search_filters_sort_and_pagination(tmp_path: Path) -> None:
     client, seeded, engine = _build_client(tmp_path)
@@ -361,16 +408,16 @@ def test_notices_list_supports_search_filters_sort_and_pagination(tmp_path: Path
         payload = response.json()
         assert payload["total"] == 4
         assert [item["id"] for item in payload["items"]] == [
-            seeded.notice_2_id,
             seeded.notice_1_id,
-            seeded.notice_3_id,
             seeded.notice_4_id,
+            seeded.notice_2_id,
+            seeded.notice_3_id,
         ]
         assert payload["items"][0]["source_code"] == "anhui_ggzy_zfcg"
-        assert payload["items"][0]["notice_type"] == "result"
+        assert payload["items"][0]["notice_type"] == "announcement"
 
-        assert _to_decimal(payload["items"][1]["budget_amount"]) == Decimal("1000000.00")
-        assert payload["items"][1]["current_version_id"] == seeded.notice_1_current_version_id
+        assert _to_decimal(payload["items"][0]["budget_amount"]) == Decimal("1000000.00")
+        assert payload["items"][0]["current_version_id"] == seeded.notice_1_current_version_id
 
         by_title_keyword = client.get("/notices", params={"keyword": "低压透明化"})
         assert by_title_keyword.status_code == 200
@@ -403,13 +450,21 @@ def test_notices_list_supports_search_filters_sort_and_pagination(tmp_path: Path
         assert by_region_filter.status_code == 200
         assert by_region_filter.json()["total"] == 2
 
+        recent_24h = client.get("/notices", params={"recent_hours": 24})
+        assert recent_24h.status_code == 200
+        assert recent_24h.json()["total"] == 2
+        assert [item["id"] for item in recent_24h.json()["items"]] == [
+            seeded.notice_1_id,
+            seeded.notice_4_id,
+        ]
+
         paged = client.get("/notices", params={"limit": 2, "offset": 1})
         assert paged.status_code == 200
         paged_payload = paged.json()
         assert paged_payload["total"] == 4
         assert [item["id"] for item in paged_payload["items"]] == [
-            seeded.notice_1_id,
-            seeded.notice_3_id,
+            seeded.notice_4_id,
+            seeded.notice_2_id,
         ]
     finally:
         app.dependency_overrides.clear()
@@ -417,7 +472,7 @@ def test_notices_list_supports_search_filters_sort_and_pagination(tmp_path: Path
 
 
 
-def test_notice_export_csv_and_json_reuse_filters_and_order(tmp_path: Path) -> None:
+def test_notice_export_csv_json_and_xlsx_reuse_filters_and_order(tmp_path: Path) -> None:
     client, seeded, engine = _build_client(tmp_path)
     try:
         csv_response = client.get("/notices/export.csv")
@@ -426,15 +481,15 @@ def test_notice_export_csv_and_json_reuse_filters_and_order(tmp_path: Path) -> N
 
         csv_rows = list(csv.DictReader(StringIO(csv_response.text)))
         assert [int(item["id"]) for item in csv_rows] == [
-            seeded.notice_2_id,
             seeded.notice_1_id,
-            seeded.notice_3_id,
             seeded.notice_4_id,
+            seeded.notice_2_id,
+            seeded.notice_3_id,
         ]
         assert csv_rows[0]["source_code"] == "anhui_ggzy_zfcg"
-        assert csv_rows[0]["notice_type"] == "result"
-        assert csv_rows[0]["budget_amount"] == "560000.00"
-        assert csv_rows[0]["current_version_id"] == "202"
+        assert csv_rows[0]["notice_type"] == "announcement"
+        assert csv_rows[0]["budget_amount"] == "1000000.00"
+        assert csv_rows[0]["current_version_id"] == "204"
 
         filtered_csv = client.get(
             "/notices/export.csv",
@@ -449,6 +504,13 @@ def test_notice_export_csv_and_json_reuse_filters_and_order(tmp_path: Path) -> N
         assert len(filtered_csv_rows) == 1
         assert int(filtered_csv_rows[0]["id"]) == seeded.notice_1_id
 
+        recent_csv = client.get("/notices/export.csv", params={"recent_hours": 24})
+        recent_csv_rows = list(csv.DictReader(StringIO(recent_csv.text)))
+        assert [int(item["id"]) for item in recent_csv_rows] == [
+            seeded.notice_1_id,
+            seeded.notice_4_id,
+        ]
+
         json_response = client.get(
             "/notices/export.json",
             params={"source_code": "anhui_ggzy_zfcg"},
@@ -458,15 +520,95 @@ def test_notice_export_csv_and_json_reuse_filters_and_order(tmp_path: Path) -> N
 
         json_payload = json_response.json()
         assert [item["id"] for item in json_payload] == [
+            seeded.notice_1_id,
+            seeded.notice_4_id,
             seeded.notice_2_id,
+        ]
+        by_id = {int(item["id"]): item for item in json_payload}
+        assert by_id[seeded.notice_1_id]["title"] == "低压透明化改造项目公告"
+        assert by_id[seeded.notice_1_id]["current_version_id"] == seeded.notice_1_current_version_id
+        assert _to_decimal(by_id[seeded.notice_1_id]["budget_amount"]) == Decimal("1000000.00")
+        assert "published_at" in json_payload[0]
+        assert "deadline_at" in json_payload[0]
+
+        recent_json = client.get("/notices/export.json", params={"recent_hours": 24})
+        assert recent_json.status_code == 200
+        assert [item["id"] for item in recent_json.json()] == [
             seeded.notice_1_id,
             seeded.notice_4_id,
         ]
-        assert json_payload[1]["title"] == "低压透明化改造项目公告"
-        assert json_payload[1]["current_version_id"] == seeded.notice_1_current_version_id
-        assert _to_decimal(json_payload[1]["budget_amount"]) == Decimal("1000000.00")
-        assert "published_at" in json_payload[0]
-        assert "deadline_at" in json_payload[0]
+
+        xlsx_response = client.get("/notices/export.xlsx")
+        assert xlsx_response.status_code == 200
+        assert xlsx_response.headers["content-type"].startswith(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert "notices.xlsx" in xlsx_response.headers.get("content-disposition", "")
+
+        workbook = load_workbook(BytesIO(xlsx_response.content))
+        sheet = workbook.active
+        headers = [cell for cell in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
+        assert headers == [
+            "id",
+            "source_code",
+            "title",
+            "notice_type",
+            "issuer",
+            "region",
+            "published_at",
+            "deadline_at",
+            "budget_amount",
+            "current_version_id",
+        ]
+        rows = list(sheet.iter_rows(min_row=2, values_only=True))
+        assert [int(row[0]) for row in rows] == [
+            seeded.notice_1_id,
+            seeded.notice_4_id,
+            seeded.notice_2_id,
+            seeded.notice_3_id,
+        ]
+
+        recent_xlsx = client.get("/notices/export.xlsx", params={"recent_hours": 24})
+        recent_book = load_workbook(BytesIO(recent_xlsx.content))
+        recent_rows = list(recent_book.active.iter_rows(min_row=2, values_only=True))
+        assert [int(row[0]) for row in recent_rows] == [
+            seeded.notice_1_id,
+            seeded.notice_4_id,
+        ]
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_notices_api_supports_dedup_query_and_sort_query(tmp_path: Path) -> None:
+    client, seeded, engine = _build_client(tmp_path)
+    try:
+        duplicate_notice_id = _insert_cross_source_duplicate_notice(engine)
+
+        dedup_on = client.get("/notices", params={"dedup": "true"})
+        assert dedup_on.status_code == 200
+        dedup_payload = dedup_on.json()
+        assert dedup_payload["total"] == 4
+        dedup_ids = [item["id"] for item in dedup_payload["items"]]
+        assert duplicate_notice_id in dedup_ids
+        assert seeded.notice_1_id not in dedup_ids
+
+        dedup_off = client.get("/notices", params={"dedup": "false"})
+        assert dedup_off.status_code == 200
+        dedup_off_payload = dedup_off.json()
+        assert dedup_off_payload["total"] == 5
+        dedup_off_ids = [item["id"] for item in dedup_off_payload["items"]]
+        assert duplicate_notice_id in dedup_off_ids
+        assert seeded.notice_1_id in dedup_off_ids
+
+        budget_sorted = client.get("/notices", params={"sort_by": "budget_amount", "sort_order": "desc"})
+        assert budget_sorted.status_code == 200
+        amount_items = [
+            _to_decimal(item["budget_amount"])
+            for item in budget_sorted.json()["items"]
+            if item["budget_amount"] is not None
+        ]
+        assert amount_items == sorted(amount_items, reverse=True)
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

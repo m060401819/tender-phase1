@@ -123,14 +123,19 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "招标信息汇总工作台", "url": "/admin/notices"}, {"label": "公告详情", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
     <div class="card">
       <div class="head">
         <h1>公告详情 #{{ notice.id }}</h1>
         <div>
+          <a href="/admin/home">返回首页</a>
+          <span style="margin: 0 8px; color: #6b7280;">|</span>
           <a href="/admin/raw-documents?source_code={{ notice.source_code }}&from_notice_id={{ notice.id }}">同源原文列表</a>
           <span style="margin: 0 8px; color: #6b7280;">|</span>
-          <a href="/admin/notices">返回列表</a>
+          <a href="/admin/notices">返回公告工作台</a>
         </div>
       </div>
 
@@ -152,6 +157,48 @@
         <div class="row"><span class="k">current_version_id</span><span class="v">{{ notice.current_version_id or '-' }}</span></div>
         <div class="row"><span class="k">summary</span><span class="v">{{ notice.summary or '-' }}</span></div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h1>版本/重复记录</h1>
+        <span class="muted">该公告共 {{ related_notice_count }} 条版本/重复记录</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>notice_id</th>
+            <th>source_code</th>
+            <th>source_name</th>
+            <th>published_at</th>
+            <th>detail_url</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in related_notices %}
+          <tr>
+            <td>{{ item.id }}</td>
+            <td>{{ item.source_code }}</td>
+            <td>{{ item.source_name }}</td>
+            <td>{{ item.published_at }}</td>
+            <td>
+              {% if item.detail_url %}
+              <a class="link" href="{{ item.detail_url }}" target="_blank" rel="noopener noreferrer">{{ item.detail_url }}</a>
+              {% else %}
+              -
+              {% endif %}
+            </td>
+            <td><a class="link" href="/admin/notices/{{ item.id }}">查看公告详情</a></td>
+          </tr>
+          {% endfor %}
+          {% if not related_notices %}
+          <tr>
+            <td colspan="6" class="muted">暂无版本/重复记录</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
     </div>
 
     <div class="card">

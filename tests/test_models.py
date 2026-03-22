@@ -35,6 +35,7 @@ def test_phase1_core_tables_are_registered() -> None:
         "tender_attachment",
         "notice_version",
         "crawl_error",
+        "health_rule_config",
     }
     assert expected.issubset(set(Base.metadata.tables.keys()))
 
@@ -42,17 +43,60 @@ def test_phase1_core_tables_are_registered() -> None:
 def test_raw_document_dedup_constraints_exist() -> None:
     assert ("source_site_id", "url_hash") in _unique_sets("raw_document")
     assert "content_hash" in _table("raw_document").c
+    assert "source_duplicate_key" in _table("raw_document").c
+    assert "source_list_item_fingerprint" in _table("raw_document").c
 
 
 def test_tender_notice_core_fields_exist() -> None:
     table = _table("tender_notice")
-    for column in ["notice_type", "published_at", "deadline_at", "region", "issuer", "budget_amount"]:
+    for column in ["notice_type", "published_at", "deadline_at", "region", "issuer", "budget_amount", "dedup_key"]:
         assert column in table.c
 
 
 def test_source_site_runtime_config_fields_exist() -> None:
     table = _table("source_site")
-    for column in ["is_active", "supports_js_render", "crawl_interval_minutes", "default_max_pages"]:
+    for column in [
+        "official_url",
+        "list_url",
+        "is_active",
+        "supports_js_render",
+        "crawl_interval_minutes",
+        "default_max_pages",
+        "schedule_enabled",
+        "schedule_days",
+        "last_scheduled_run_at",
+        "next_scheduled_run_at",
+        "last_schedule_status",
+    ]:
+        assert column in table.c
+
+
+def test_crawl_job_retry_fields_and_type_constraint_exist() -> None:
+    table = _table("crawl_job")
+    assert "retry_of_job_id" in table.c
+    for column in [
+        "list_items_seen",
+        "list_items_unique",
+        "list_items_source_duplicates_skipped",
+        "detail_pages_fetched",
+        "records_inserted",
+        "records_updated",
+        "source_duplicates_suppressed",
+    ]:
+        assert column in table.c
+    checks = "\n".join(_check_sql("crawl_job"))
+    assert "manual_retry" in checks
+
+
+def test_health_rule_config_fields_exist() -> None:
+    table = _table("health_rule_config")
+    for column in [
+        "recent_error_warning_threshold",
+        "recent_error_critical_threshold",
+        "consecutive_failure_warning_threshold",
+        "consecutive_failure_critical_threshold",
+        "partial_warning_enabled",
+    ]:
         assert column in table.c
 
 
@@ -67,6 +111,7 @@ def test_notice_version_constraints_exist() -> None:
     unique_sets = _unique_sets("notice_version")
     assert ("notice_id", "version_no") in unique_sets
     assert ("notice_id", "content_hash") in unique_sets
+    assert "dedup_key" in _table("notice_version").c
 
 
 def test_tender_attachment_dedup_constraints_exist() -> None:

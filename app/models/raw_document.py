@@ -35,6 +35,8 @@ class RawDocument(TimestampMixin, Base):
         Index("ix_raw_document_content_hash", "content_hash"),
         Index("ix_raw_document_crawl_job", "crawl_job_id"),
         Index("ix_raw_document_fetched_at", "fetched_at"),
+        Index("ix_raw_document_source_duplicate_key", "source_duplicate_key"),
+        Index("ix_raw_document_source_list_item_fingerprint", "source_list_item_fingerprint"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -53,6 +55,8 @@ class RawDocument(TimestampMixin, Base):
     normalized_url: Mapped[str] = mapped_column(Text, nullable=False)
     url_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_duplicate_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_list_item_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     document_type: Mapped[str] = mapped_column(String(16), nullable=False, default="html", server_default="html")
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)

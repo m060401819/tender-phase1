@@ -72,11 +72,18 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "抓取错误列表", "url": "/admin/crawl-errors"}, {"label": "错误详情", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
     <div class="card">
       <div class="head">
         <h1>错误详情 #{{ error.id }}</h1>
-        <a href="/admin/crawl-errors">返回列表</a>
+        <div>
+          <a href="/admin/home">返回首页</a>
+          <span style="margin: 0 8px; color: #6b7280;">|</span>
+          <a href="/admin/crawl-errors">返回错误列表</a>
+        </div>
       </div>
       <div class="grid">
         <div class="row"><span class="k">id</span><span class="v">{{ error.id }}</span></div>
@@ -98,6 +105,16 @@
         <div class="row"><span class="k">message</span><span class="v">{{ error.message }}</span></div>
         <div class="row"><span class="k">detail</span><span class="v">{{ error.detail or '-' }}</span></div>
         <div class="row"><span class="k">traceback</span><span class="v">{{ error.traceback or '-' }}</span></div>
+        <div class="row">
+          <span class="k">latest_retry_status</span>
+          <span class="v">
+            {% if latest_retry.job_id %}
+            {{ latest_retry.status or '-' }}（<a class="link" href="/admin/crawl-jobs/{{ latest_retry.job_id }}">任务 #{{ latest_retry.job_id }}</a>）
+            {% else %}
+            -
+            {% endif %}
+          </span>
+        </div>
       </div>
     </div>
 

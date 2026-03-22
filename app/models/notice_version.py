@@ -36,6 +36,8 @@ class NoticeVersion(TimestampMixin, Base):
         Index("ix_notice_version_content_hash", "content_hash"),
         Index("ix_notice_version_notice_current", "notice_id", "is_current"),
         Index("ix_notice_version_raw_document", "raw_document_id"),
+        Index("ix_notice_version_dedup_key", "dedup_key"),
+        Index("ix_notice_version_source_duplicate_key", "source_duplicate_key"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -54,6 +56,8 @@ class NoticeVersion(TimestampMixin, Base):
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    dedup_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_duplicate_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     notice_type: Mapped[str] = mapped_column(String(32), nullable=False)
     issuer: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -5,10 +5,14 @@
 ## 1. 目标范围
 
 `source_site` 在现有“查看 + 手动触发抓取”基础上，新增可编辑字段：
+- `name`
+- `official_url`
+- `list_url`
 - `is_active`
 - `crawl_interval_minutes`
 - `supports_js_render`
 - `default_max_pages`
+- `description`（备注）
 
 ## 2. API
 
@@ -18,6 +22,10 @@
 
 ```json
 {
+  "name": "安徽省公共资源交易监管网（政府采购）",
+  "official_url": "https://ggzy.ah.gov.cn/",
+  "list_url": "https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1",
+  "description": "样板来源",
   "is_active": true,
   "crawl_interval_minutes": 30,
   "supports_js_render": false,
@@ -26,7 +34,8 @@
 ```
 
 规则：
-- 仅允许上述四个字段
+- 仅允许上述字段
+- URL 字段必须是合法 `http/https`
 - `crawl_interval_minutes` 与 `default_max_pages` 必须 `>= 1`
 - 来源不存在返回：
 
@@ -42,6 +51,10 @@
 - `GET /sources`
 - `GET /sources/{code}`
 - `POST /sources/{code}/crawl-jobs`
+
+Phase-2 调度配置接口：
+- `GET /sources/{code}/schedule`
+- `PATCH /sources/{code}/schedule`
 
 ## 3. 管理页面
 
@@ -60,6 +73,12 @@
 2. `303` 重定向回 `/admin/sources/{code}`
 3. 详情页显示最新配置值
 
+Phase-2 新增自动抓取配置表单（同页）：
+- `POST /admin/sources/{code}/schedule`
+- 支持设置：
+  - `schedule_enabled`
+  - `schedule_days`（1/2/3/7）
+
 ## 4. 实现落点
 
 - 模型：`app/models/source_site.py`
@@ -75,3 +94,5 @@
 - `tests/test_source_admin_pages.py`
   - 配置表单渲染
   - 配置提交、重定向与数据库落库校验
+
+自动调度能力详见：`docs/source-schedule.md`

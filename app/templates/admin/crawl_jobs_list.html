@@ -42,7 +42,7 @@
     .meta { color: var(--muted); font-size: 13px; }
     form {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 10px;
       padding: 16px 20px;
       border-bottom: 1px solid var(--line);
@@ -84,6 +84,21 @@
       font-size: 12px;
       font-weight: 600;
     }
+    .status-running { background: #dbeafe; color: #1d4ed8; }
+    .status-pending { background: #fef3c7; color: #92400e; }
+    .status-failed { background: #fee2e2; color: #b91c1c; }
+    .status-partial { background: #ffedd5; color: #c2410c; }
+    .quick {
+      padding: 0 20px 10px 20px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .quick a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      margin-right: 12px;
+    }
     .pager {
       display: flex;
       justify-content: space-between;
@@ -97,6 +112,58 @@
     }
     .muted { color: var(--muted); }
     .actions a { color: var(--accent); text-decoration: none; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .notice {
+      margin: 12px 20px;
+      padding: 10px 12px;
+      border: 1px solid #86efac;
+      border-radius: 10px;
+      background: #f0fdf4;
+      color: #166534;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .notice.live {
+      border-color: #93c5fd;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .tag-retried { background: #dcfce7; color: #166534; }
+    .tag-retry { background: #e0f2fe; color: #0369a1; }
+    .btn-inline {
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 4px 8px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .progress-cell {
+      min-width: 220px;
+      line-height: 1.5;
+    }
+    .progress-stage {
+      font-weight: 700;
+      color: #0f766e;
+      margin-bottom: 4px;
+    }
 
     @media (max-width: 1100px) {
       form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -109,12 +176,43 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "抓取任务列表", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
     <div class="card">
       <div class="head">
         <h1>抓取任务看板</h1>
-        <div class="meta">/admin/crawl-jobs</div>
+        <div class="meta"><a href="/admin/home" style="color:#0f766e;text-decoration:none;">返回首页</a> /admin/crawl-jobs</div>
       </div>
+      <div class="quick">
+        <a href="/admin/crawl-jobs?ops_filter=abnormal">仅看异常</a>
+        <a href="/admin/crawl-jobs?ops_filter=today_failed">仅看今日失败</a>
+        <a href="/admin/crawl-jobs?ops_filter=partial">仅看 partial</a>
+      </div>
+      {% if created_job_id %}
+      <div class="notice">
+        已创建手动抓取任务 #{{ created_job_id }}
+        {% if created_job %}
+        ，当前状态：{{ created_job.status_label }} / {{ created_job.progress_stage_label }} / {{ created_job.progress_summary }}
+        {% endif %}
+        ，<a href="/admin/crawl-jobs/{{ created_job_id }}" style="color:#166534;">查看任务详情</a>
+      </div>
+      {% endif %}
+      {% if retry_created_job_id %}
+      <div class="notice">
+        重试任务已创建：#{{ retry_created_job_id }}
+        {% if retry_created_job %}
+        ，当前状态：{{ retry_created_job.status_label }} / {{ retry_created_job.progress_stage_label }} / {{ retry_created_job.progress_summary }}
+        {% endif %}
+        ，<a href="/admin/crawl-jobs/{{ retry_created_job_id }}" style="color:#166534;">查看任务详情</a>
+      </div>
+      {% endif %}
+      {% if polling_enabled %}
+      <div class="notice live" data-live-refresh="true">
+        检测到抓取任务仍在运行或排队，页面每 {{ auto_refresh_interval_seconds }} 秒自动刷新一次。
+      </div>
+      {% endif %}
 
       <form method="get" action="/admin/crawl-jobs">
         <input name="source_code" value="{{ source_code }}" placeholder="source_code" />
@@ -130,6 +228,12 @@
           <option value="">job_type: 全部</option>
           {% for option in job_type_options %}
           <option value="{{ option }}" {% if option == job_type %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+
+        <select name="ops_filter">
+          {% for value, label in ops_filter_options %}
+          <option value="{{ value }}" {% if value == ops_filter %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
 
@@ -153,33 +257,76 @@
             <th>started_at</th>
             <th>finished_at</th>
             <th>pages</th>
+            <th>list_seen</th>
+            <th>list_unique</th>
+            <th>src_dup_skipped</th>
+            <th>detail_pages</th>
             <th>docs</th>
             <th>notices</th>
             <th>dedup</th>
             <th>errors</th>
+            <th>实时进度</th>
+            <th>重试状态</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
           {% for job in jobs %}
-          <tr>
+          <tr {% if job.status in ['failed', 'partial'] %}style="background:#fff7ed;"{% elif job.is_active %}style="background:#eff6ff;"{% endif %}>
             <td>{{ job.id }}</td>
             <td>{{ job.source_code }}</td>
-            <td>{{ job.job_type }}</td>
-            <td><span class="status">{{ job.status }}</span></td>
+            <td>{{ job.job_type_label }}</td>
+            <td>
+              <span class="status {% if job.status == 'pending' %}status-pending{% elif job.status == 'running' %}status-running{% elif job.status == 'failed' %}status-failed{% elif job.status == 'partial' %}status-partial{% endif %}">
+                {{ job.status_label }}
+              </span>
+            </td>
             <td>{{ job.started_at }}</td>
             <td>{{ job.finished_at }}</td>
             <td>{{ job.pages_fetched }}</td>
+            <td>{{ job.list_items_seen }}</td>
+            <td>{{ job.list_items_unique }}</td>
+            <td>{{ job.list_items_source_duplicates_skipped + job.source_duplicates_suppressed }}</td>
+            <td>{{ job.detail_pages_fetched }}</td>
             <td>{{ job.documents_saved }}</td>
             <td>{{ job.notices_upserted }}</td>
             <td>{{ job.deduplicated_count }}</td>
             <td>{{ job.error_count }}</td>
-            <td class="actions"><a href="/admin/crawl-jobs/{{ job.id }}">详情</a></td>
+            <td class="progress-cell">
+              <div class="progress-stage">{{ job.progress_stage_label }}</div>
+              <div class="muted">{{ job.progress_summary }}</div>
+            </td>
+            <td>
+              {% if job.retried_by_job_id %}
+              <span class="tag tag-retried">已重试</span>
+              <div>
+                <a href="/admin/crawl-jobs/{{ job.retried_by_job_id }}">#{{ job.retried_by_job_id }}</a>
+                ({{ job.retried_by_status or '-' }})
+              </div>
+              {% elif job.retry_of_job_id %}
+              <span class="tag tag-retry">重试任务</span>
+              <div><a href="/admin/crawl-jobs/{{ job.retry_of_job_id }}">原任务 #{{ job.retry_of_job_id }}</a></div>
+              {% else %}
+              <span class="muted">未重试</span>
+              {% endif %}
+            </td>
+            <td class="actions">
+              <a href="/admin/crawl-jobs/{{ job.id }}">详情</a>
+              {% if job.status in ['failed', 'partial'] and (not job.retried_by_job_id) and (not job.retry_of_job_id) %}
+              <form method="post" action="/admin/crawl-jobs/{{ job.id }}/retry">
+                <button class="btn-inline" type="submit">重试</button>
+              </form>
+              {% elif job.retried_by_job_id %}
+              <span class="muted">已重试</span>
+              {% elif job.retry_of_job_id %}
+              <span class="muted">重试任务</span>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
           {% if not jobs %}
           <tr>
-            <td colspan="12" class="muted">暂无任务记录</td>
+            <td colspan="18" class="muted">暂无任务记录</td>
           </tr>
           {% endif %}
         </tbody>
@@ -195,5 +342,12 @@
       </div>
     </div>
   </div>
+  {% if polling_enabled %}
+  <script>
+    window.setTimeout(function () {
+      window.location.reload();
+    }, {{ auto_refresh_interval_seconds * 1000 }});
+  </script>
+  {% endif %}
 </body>
 </html>

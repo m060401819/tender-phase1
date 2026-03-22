@@ -68,12 +68,21 @@
 - 支持 `limit / offset` 分页
 - 每条记录可跳转 `/admin/crawl-errors/{id}`
 - `crawl_job_id` 可跳转到 `/admin/crawl-jobs/{id}`
+- 新增“最近失败原因（按来源聚合，近7天）”视图：
+  - 按来源展示最近7天错误数
+  - 展示该来源最近错误摘要（`message + created_at`）
+  - 可一键跳转最近错误详情
+  - 展示最近一次重试结果摘要（若存在重试任务）
+  - 可跳转最近重试任务详情（`/admin/crawl-jobs/{id}`）
 
 ## 5. `/admin/crawl-errors/{id}` 页面能力
 
 - 展示完整错误信息（含 `message/detail/traceback`）
 - 展示关联 `raw_document` / `notice` / `notice_version` 摘要
 - 关联实体提供跳转链接（`/admin/raw-documents/{id}`、`/admin/notices/{id}`）
+- 新增“最近一次重试结果”展示：
+  - 最近重试状态
+  - 最近重试任务跳转链接（若存在）
 
 ## 6. 实现落点
 

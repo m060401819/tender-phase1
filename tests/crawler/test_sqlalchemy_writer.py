@@ -364,6 +364,205 @@ def test_notice_merge_strategy_by_detail_url_without_external_id(tmp_path: Path)
     context.close()
 
 
+def test_source_duplicate_suppression_and_version_update_boundary(tmp_path: Path) -> None:
+    context = _make_context(tmp_path / "source_duplicate_boundary.db")
+    notice_writer = SqlAlchemyNoticeWriter(context=context)
+    service = CrawlJobService(session_factory=context.session_factory)
+
+    job = service.create_job(source_code="anhui_ggzy_zfcg", job_type="manual", triggered_by="pytest")
+    service.start_job(job.id)
+
+    source_dup_key_a = "src-dup-key-a"
+    source_dup_key_b = "src-dup-key-b"
+    detail_url_a = "https://ggzy.ah.gov.cn/zfcg/newDetail?guid=dup-a"
+    detail_url_b = "https://ggzy.ah.gov.cn/zfcg/newDetail?guid=dup-b"
+
+    notice_v1 = {
+        "source_code": "anhui_ggzy_zfcg",
+        "source_site_name": "安徽省公共资源交易监管网",
+        "source_site_url": "https://ggzy.ah.gov.cn",
+        "crawl_job_id": job.id,
+        "detail_page_url": detail_url_a,
+        "title": "同源重复抑制公告",
+        "published_at": "2026-03-20T00:00:00+00:00",
+        "notice_type": "announcement",
+        "source_duplicate_key": source_dup_key_a,
+        "raw_content_hash": "content-hash-v1",
+        "content_text": "正文 v1",
+    }
+    version_v1 = {
+        "source_code": "anhui_ggzy_zfcg",
+        "source_site_name": "安徽省公共资源交易监管网",
+        "source_site_url": "https://ggzy.ah.gov.cn",
+        "crawl_job_id": job.id,
+        "detail_page_url": detail_url_a,
+        "title": "同源重复抑制公告",
+        "published_at": "2026-03-20T00:00:00+00:00",
+        "notice_type": "announcement",
+        "source_duplicate_key": source_dup_key_a,
+        "content_hash": "content-hash-v1",
+        "content_text": "正文 v1",
+        "version_no": 1,
+        "is_current": True,
+    }
+
+    # 首次入库
+    notice_writer.write_notice(notice_v1)
+    notice_writer.write_notice_version(version_v1)
+
+    # 同 source_duplicate_key + 同内容，命中 source duplicate suppression
+    notice_writer.write_notice(notice_v1)
+    notice_writer.write_notice_version(version_v1)
+
+    # 同 source_duplicate_key + 内容变化，走版本更新
+    notice_writer.write_notice({**notice_v1, "raw_content_hash": "content-hash-v2", "content_text": "正文 v2"})
+    notice_writer.write_notice_version(
+        {
+            **version_v1,
+            "content_hash": "content-hash-v2",
+            "content_text": "正文 v2",
+        }
+    )
+
+    # 标题相同但 detail_url 不同，不应误杀
+    notice_writer.write_notice(
+        {
+            **notice_v1,
+            "detail_page_url": detail_url_b,
+            "source_duplicate_key": source_dup_key_b,
+            "raw_content_hash": "content-hash-b1",
+            "content_text": "正文 b1",
+        }
+    )
+    notice_writer.write_notice_version(
+        {
+            **version_v1,
+            "detail_page_url": detail_url_b,
+            "source_duplicate_key": source_dup_key_b,
+            "content_hash": "content-hash-b1",
+            "content_text": "正文 b1",
+        }
+    )
+
+    finished = service.finish_job(job.id)
+    assert finished is not None
+    assert finished.source_duplicates_suppressed == 1
+
+    with context.session() as session:
+        notices = session.scalars(select(TenderNotice).order_by(TenderNotice.id)).all()
+        assert len(notices) == 2
+
+        notice_a = session.scalar(select(TenderNotice).where(TenderNotice.source_duplicate_key == source_dup_key_a))
+        assert notice_a is not None
+        assert notice_a.dedup_key is not None
+        versions_a = session.scalars(
+            select(NoticeVersion)
+            .where(NoticeVersion.notice_id == notice_a.id)
+            .order_by(NoticeVersion.version_no.asc())
+        ).all()
+        assert len(versions_a) == 2
+        assert all(version.dedup_key == notice_a.dedup_key for version in versions_a)
+        assert versions_a[0].content_hash == "content-hash-v1"
+        assert versions_a[1].content_hash == "content-hash-v2"
+
+        notice_b = session.scalar(select(TenderNotice).where(TenderNotice.source_duplicate_key == source_dup_key_b))
+        assert notice_b is not None
+        versions_b = session.scalars(select(NoticeVersion).where(NoticeVersion.notice_id == notice_b.id)).all()
+        assert len(versions_b) == 1
+
+    context.close()
+
+
+def test_notice_persistence_dedup_merges_high_similarity_across_different_detail_urls(tmp_path: Path) -> None:
+    context = _make_context(tmp_path / "notice_persistence_dedup.db")
+    notice_writer = SqlAlchemyNoticeWriter(context=context)
+
+    notice_writer.write_notice(
+        {
+            "source_code": "anhui_ggzy_zfcg",
+            "source_site_name": "安徽省公共资源交易监管网",
+            "source_site_url": "https://ggzy.ah.gov.cn",
+            "detail_page_url": "https://ggzy.ah.gov.cn/zfcg/newDetail?guid=sim-a",
+            "title": "低压透明化平台升级改造采购公告",
+            "published_at": "2026-03-20T00:00:00+00:00",
+            "notice_type": "announcement",
+            "issuer": "合肥市测试局",
+            "region": "合肥市",
+            "budget_amount": "1234500",
+            "raw_content_hash": "sim-content-v1",
+            "content_text": "正文 v1",
+        }
+    )
+    notice_writer.write_notice_version(
+        {
+            "source_code": "anhui_ggzy_zfcg",
+            "source_site_name": "安徽省公共资源交易监管网",
+            "source_site_url": "https://ggzy.ah.gov.cn",
+            "detail_page_url": "https://ggzy.ah.gov.cn/zfcg/newDetail?guid=sim-a",
+            "title": "低压透明化平台升级改造采购公告",
+            "published_at": "2026-03-20T00:00:00+00:00",
+            "notice_type": "announcement",
+            "issuer": "合肥市测试局",
+            "region": "合肥市",
+            "budget_amount": "1234500",
+            "content_hash": "sim-content-v1",
+            "content_text": "正文 v1",
+            "version_no": 1,
+            "is_current": True,
+        }
+    )
+
+    # detail_url 不同，但标题/发布日期/issuer/预算/region 高度一致，应归并到同一 notice。
+    notice_writer.write_notice(
+        {
+            "source_code": "anhui_ggzy_zfcg",
+            "source_site_name": "安徽省公共资源交易监管网",
+            "source_site_url": "https://ggzy.ah.gov.cn",
+            "detail_page_url": "https://ggzy.ah.gov.cn/zfcg/newDetail?guid=sim-b",
+            "title": "低压透明化平台升级改造采购公告",
+            "published_at": "2026-03-20T00:00:00+00:00",
+            "notice_type": "announcement",
+            "issuer": "合肥市测试局",
+            "region": "合肥市",
+            "budget_amount": "1234999",
+            "raw_content_hash": "sim-content-v2",
+            "content_text": "正文 v2",
+        }
+    )
+    notice_writer.write_notice_version(
+        {
+            "source_code": "anhui_ggzy_zfcg",
+            "source_site_name": "安徽省公共资源交易监管网",
+            "source_site_url": "https://ggzy.ah.gov.cn",
+            "detail_page_url": "https://ggzy.ah.gov.cn/zfcg/newDetail?guid=sim-b",
+            "title": "低压透明化平台升级改造采购公告",
+            "published_at": "2026-03-20T00:00:00+00:00",
+            "notice_type": "announcement",
+            "issuer": "合肥市测试局",
+            "region": "合肥市",
+            "budget_amount": "1234999",
+            "content_hash": "sim-content-v2",
+            "content_text": "正文 v2",
+            "version_no": 1,
+            "is_current": True,
+        }
+    )
+
+    with context.session() as session:
+        notices = session.scalars(select(TenderNotice).order_by(TenderNotice.id)).all()
+        assert len(notices) == 1
+        versions = session.scalars(
+            select(NoticeVersion)
+            .where(NoticeVersion.notice_id == notices[0].id)
+            .order_by(NoticeVersion.version_no.asc())
+        ).all()
+        assert len(versions) == 2
+        assert versions[0].content_hash == "sim-content-v1"
+        assert versions[1].content_hash == "sim-content-v2"
+
+    context.close()
+
+
 def test_attachment_url_normalization_and_dedup(tmp_path: Path) -> None:
     context = _make_context(tmp_path / "attachment_dedup.db")
     notice_writer = SqlAlchemyNoticeWriter(context=context)
@@ -592,6 +791,12 @@ def test_sqlalchemy_writer_updates_crawl_job_metrics(tmp_path: Path) -> None:
             "storage_uri": "raw/1.html",
             "raw_body": "dup-body",
             "http_status": 200,
+            "extra_meta": {
+                "role": "list",
+                "page_item_count": 6,
+                "new_unique_item_count": 4,
+                "page_source_duplicates_skipped": 2,
+            },
         }
     )
     raw_writer.write_raw_document(
@@ -607,6 +812,9 @@ def test_sqlalchemy_writer_updates_crawl_job_metrics(tmp_path: Path) -> None:
             "storage_uri": "raw/2.html",
             "raw_body": "dup-body",
             "http_status": 200,
+            "extra_meta": {
+                "role": "detail",
+            },
         }
     )
 
@@ -657,5 +865,11 @@ def test_sqlalchemy_writer_updates_crawl_job_metrics(tmp_path: Path) -> None:
     assert finished.notices_upserted == 2
     assert finished.error_count == 1
     assert finished.deduplicated_count >= 2
+    assert finished.list_items_seen == 6
+    assert finished.list_items_unique == 4
+    assert finished.list_items_source_duplicates_skipped == 2
+    assert finished.detail_pages_fetched == 1
+    assert finished.records_inserted >= 2
+    assert finished.records_updated >= 1
 
     context.close()

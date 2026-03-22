@@ -2,6 +2,7 @@
 
 from app.models.crawl_error import CrawlError
 from app.models.crawl_job import CrawlJob
+from app.models.health_rule_config import HealthRuleConfig
 from app.models.notice_version import NoticeVersion
 from app.models.raw_document import RawDocument
 from app.models.source_site import SourceSite
@@ -16,4 +17,5 @@ __all__ = [
     "TenderAttachment",
     "NoticeVersion",
     "CrawlError",
+    "HealthRuleConfig",
 ]

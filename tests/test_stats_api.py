@@ -320,6 +320,8 @@ def test_stats_overview_api_returns_counts_trends_and_recent_summaries(tmp_path:
         assert payload["crawl_job_count"] == 4
         assert payload["crawl_job_running_count"] == 1
         assert payload["notice_count"] == 3
+        assert payload["today_new_notice_count"] == 1
+        assert payload["recent_24h_new_notice_count"] == 1
         assert payload["raw_document_count"] == 2
         assert payload["crawl_error_count"] == 3
 

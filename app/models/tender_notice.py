@@ -36,6 +36,8 @@ class TenderNotice(TimestampMixin, Base):
         Index("ix_tender_notice_deadline", "deadline_at"),
         Index("ix_tender_notice_region", "region"),
         Index("ix_tender_notice_issuer", "issuer"),
+        Index("ix_tender_notice_dedup_key", "dedup_key"),
+        Index("ix_tender_notice_source_duplicate_key", "source_duplicate_key"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -48,6 +50,8 @@ class TenderNotice(TimestampMixin, Base):
     project_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     dedup_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dedup_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_duplicate_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     notice_type: Mapped[str] = mapped_column(String(32), nullable=False)
 

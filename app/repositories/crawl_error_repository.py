@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
@@ -35,6 +35,15 @@ class CrawlErrorListResult:
     total: int
     limit: int
     offset: int
+
+
+@dataclass(slots=True)
+class CrawlErrorSourceSummaryRecord:
+    source_code: str
+    recent_error_count: int
+    latest_error_id: int
+    latest_error_message: str
+    latest_error_created_at: datetime
 
 
 @dataclass(slots=True)
@@ -138,6 +147,71 @@ class CrawlErrorRepository:
             notice=notice,
             notice_version=notice_version,
         )
+
+    def list_recent_source_summaries(
+        self,
+        *,
+        filters: CrawlErrorQueryFilters,
+        recent_days: int = 7,
+        limit: int = 20,
+    ) -> list[CrawlErrorSourceSummaryRecord]:
+        since = datetime.now(timezone.utc) - timedelta(days=recent_days)
+        summary_stmt = (
+            select(
+                CrawlError.source_site_id.label("source_site_id"),
+                SourceSite.code.label("source_code"),
+                func.count(CrawlError.id).label("recent_error_count"),
+                func.max(CrawlError.id).label("latest_error_id"),
+            )
+            .join(SourceSite, SourceSite.id == CrawlError.source_site_id)
+            .where(CrawlError.created_at >= since)
+        )
+        if filters.source_code:
+            summary_stmt = summary_stmt.where(SourceSite.code == filters.source_code)
+        if filters.stage:
+            summary_stmt = summary_stmt.where(CrawlError.stage == filters.stage)
+        if filters.crawl_job_id is not None:
+            summary_stmt = summary_stmt.where(CrawlError.crawl_job_id == filters.crawl_job_id)
+        if filters.error_type:
+            summary_stmt = summary_stmt.where(CrawlError.error_type == filters.error_type)
+
+        summary_rows = self.session.execute(
+            summary_stmt
+            .group_by(CrawlError.source_site_id, SourceSite.code)
+            .order_by(func.count(CrawlError.id).desc(), func.max(CrawlError.id).desc())
+            .limit(limit)
+        ).all()
+        if not summary_rows:
+            return []
+
+        latest_error_ids = [int(row.latest_error_id) for row in summary_rows if row.latest_error_id is not None]
+        latest_error_rows = self.session.execute(
+            select(CrawlError.id, CrawlError.error_message, CrawlError.created_at).where(CrawlError.id.in_(latest_error_ids))
+        ).all()
+        latest_error_map = {
+            int(error_id): {
+                "message": message,
+                "created_at": created_at,
+            }
+            for error_id, message, created_at in latest_error_rows
+        }
+
+        items: list[CrawlErrorSourceSummaryRecord] = []
+        for row in summary_rows:
+            latest_error_id = int(row.latest_error_id or 0)
+            latest_payload = latest_error_map.get(latest_error_id)
+            if latest_payload is None:
+                continue
+            items.append(
+                CrawlErrorSourceSummaryRecord(
+                    source_code=row.source_code,
+                    recent_error_count=int(row.recent_error_count or 0),
+                    latest_error_id=latest_error_id,
+                    latest_error_message=str(latest_payload["message"] or ""),
+                    latest_error_created_at=latest_payload["created_at"],
+                )
+            )
+        return items
 
     def _build_list_query(self, filters: CrawlErrorQueryFilters) -> Select:
         stmt = select(CrawlError, SourceSite.code).join(SourceSite, SourceSite.id == CrawlError.source_site_id)

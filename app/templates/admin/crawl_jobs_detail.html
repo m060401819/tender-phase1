@@ -62,6 +62,61 @@
       color: #d1fae5;
       border-radius: 0 0 14px 14px;
     }
+    .form {
+      padding: 16px;
+      border-top: 1px solid var(--line);
+    }
+    .btn {
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 8px 12px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .compare {
+      padding: 14px 16px;
+      border-top: 1px solid var(--line);
+      background: #f8fafc;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #ecfeff;
+      color: #0f766e;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .notice {
+      margin: 12px 20px 0 20px;
+      padding: 10px 12px;
+      border: 1px solid #86efac;
+      border-radius: 10px;
+      background: #f0fdf4;
+      color: #166534;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .notice.live {
+      border-color: #93c5fd;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .live-panel {
+      margin: 12px 20px 0 20px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f8fafc;
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .link { color: var(--accent); text-decoration: none; }
     @media (max-width: 720px) {
       .grid { grid-template-columns: 1fr; }
       .row { border-right: none; }
@@ -70,11 +125,32 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "抓取任务列表", "url": "/admin/crawl-jobs"}, {"label": "任务详情", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
     <div class="card">
       <div class="head">
         <h1>任务详情 #{{ job.id }}</h1>
-        <a href="/admin/crawl-jobs">返回列表</a>
+        <div>
+          <a href="/admin/home">返回首页</a>
+          <span style="margin: 0 8px; color: #6b7280;">|</span>
+          <a href="/admin/crawl-jobs">返回任务列表</a>
+        </div>
+      </div>
+      {% if created_job_id %}
+      <div class="notice">已创建手动抓取任务 #{{ created_job_id }}</div>
+      {% endif %}
+      {% if job.is_active %}
+      <div class="notice live" data-live-refresh="true">
+        当前任务仍在执行，页面每 {{ auto_refresh_interval_seconds }} 秒自动刷新一次。
+      </div>
+      {% endif %}
+      <div class="live-panel">
+        <span class="tag">实时抓取进度</span><br />
+        当前状态：{{ job.status_label }}<br />
+        当前阶段：{{ job.progress_stage_label }}<br />
+        进度摘要：{{ job.progress_summary }}
       </div>
 
       <div class="grid">
@@ -83,16 +159,57 @@
         <div class="row"><span class="k">source_code</span><span class="v">{{ job.source_code }}</span></div>
         <div class="row"><span class="k">job_type</span><span class="v">{{ job.job_type }}</span></div>
         <div class="row"><span class="k">status</span><span class="v">{{ job.status }}</span></div>
+        <div class="row"><span class="k">retry_of_job_id</span><span class="v">{{ job.retry_of_job_id or '-' }}</span></div>
+        <div class="row"><span class="k">retried_by_job_id</span><span class="v">{{ job.retried_by_job_id or '-' }}</span></div>
+        <div class="row"><span class="k">retried_by_status</span><span class="v">{{ job.retried_by_status or '-' }}</span></div>
+        <div class="row"><span class="k">retried_by_finished_at</span><span class="v">{{ job.retried_by_finished_at }}</span></div>
         <div class="row"><span class="k">recent_crawl_error_count</span><span class="v">{{ job.recent_crawl_error_count }}</span></div>
         <div class="row"><span class="k">started_at</span><span class="v">{{ job.started_at }}</span></div>
         <div class="row"><span class="k">finished_at</span><span class="v">{{ job.finished_at }}</span></div>
+        <div class="row"><span class="k">backfill_year</span><span class="v">{{ job.backfill_year or '-' }}</span></div>
+        <div class="row"><span class="k">pages_scraped</span><span class="v">{{ job.pages_scraped }}</span></div>
         <div class="row"><span class="k">pages_fetched</span><span class="v">{{ job.pages_fetched }}</span></div>
+        <div class="row"><span class="k">list_seen</span><span class="v">{{ job.list_seen }}</span></div>
+        <div class="row"><span class="k">list_unique</span><span class="v">{{ job.list_unique }}</span></div>
+        <div class="row"><span class="k">list_items_seen</span><span class="v">{{ job.list_items_seen }}</span></div>
+        <div class="row"><span class="k">list_items_unique</span><span class="v">{{ job.list_items_unique }}</span></div>
+        <div class="row"><span class="k">list_items_source_duplicates_skipped</span><span class="v">{{ job.list_items_source_duplicates_skipped }}</span></div>
+        <div class="row"><span class="k">detail_requests</span><span class="v">{{ job.detail_requests }}</span></div>
+        <div class="row"><span class="k">detail_pages_fetched</span><span class="v">{{ job.detail_pages_fetched }}</span></div>
         <div class="row"><span class="k">documents_saved</span><span class="v">{{ job.documents_saved }}</span></div>
+        <div class="row"><span class="k">raw_documents_written</span><span class="v">{{ job.raw_documents_written }}</span></div>
         <div class="row"><span class="k">notices_upserted</span><span class="v">{{ job.notices_upserted }}</span></div>
+        <div class="row"><span class="k">notices_written</span><span class="v">{{ job.notices_written }}</span></div>
         <div class="row"><span class="k">deduplicated_count</span><span class="v">{{ job.deduplicated_count }}</span></div>
+        <div class="row"><span class="k">dedup_skipped</span><span class="v">{{ job.dedup_skipped }}</span></div>
+        <div class="row"><span class="k">records_inserted</span><span class="v">{{ job.records_inserted }}</span></div>
+        <div class="row"><span class="k">records_updated</span><span class="v">{{ job.records_updated }}</span></div>
+        <div class="row"><span class="k">source_duplicates_suppressed</span><span class="v">{{ job.source_duplicates_suppressed }}</span></div>
+        <div class="row"><span class="k">first_publish_date_seen</span><span class="v">{{ job.first_publish_date_seen or '-' }}</span></div>
+        <div class="row"><span class="k">last_publish_date_seen</span><span class="v">{{ job.last_publish_date_seen or '-' }}</span></div>
+        <div class="row"><span class="k">failure_reason</span><span class="v">{{ job.failure_reason or '-' }}</span></div>
         <div class="row"><span class="k">error_count</span><span class="v">{{ job.error_count }}</span></div>
         <div class="row"><span class="k">message</span><span class="v">{{ job.message or '-' }}</span></div>
       </div>
+      <div class="compare">
+        <span class="tag">上次失败 vs 本次重试</span><br />
+        上次状态：{{ job.status }}<br />
+        上次原因：{{ job.message or '-' }}<br />
+        {% if job.retried_by_job_id %}
+        本次重试：{{ job.retried_by_status or '-' }}（<a class="link" href="/admin/crawl-jobs/{{ job.retried_by_job_id }}">任务 #{{ job.retried_by_job_id }}</a>）<br />
+        本次摘要：{{ job.retried_by_message or '-' }}
+        {% elif job.retry_of_job_id %}
+        此任务是对 <a class="link" href="/admin/crawl-jobs/{{ job.retry_of_job_id }}">原任务 #{{ job.retry_of_job_id }}</a> 的重试。<br />
+        原任务原因：{{ job.retry_of_job_message or '-' }}
+        {% else %}
+        暂无重试记录
+        {% endif %}
+      </div>
+      {% if can_retry %}
+      <form class="form" method="post" action="/admin/crawl-jobs/{{ job.id }}/retry">
+        <button class="btn" type="submit">重试该异常任务（仅一次）</button>
+      </form>
+      {% endif %}
     </div>
 
     <div class="card">
@@ -102,5 +219,12 @@
       <pre class="mono" id="raw-json">{{ raw_json | safe }}</pre>
     </div>
   </div>
+  {% if job.is_active %}
+  <script>
+    window.setTimeout(function () {
+      window.location.reload();
+    }, {{ auto_refresh_interval_seconds * 1000 }});
+  </script>
+  {% endif %}
 </body>
 </html>

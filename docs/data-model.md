@@ -20,6 +20,8 @@
 - `code` 站点唯一编码（唯一）
 - `name` 站点名称
 - `base_url` 站点入口
+- `official_url` 官网链接
+- `list_url` 列表页链接
 - `is_active` 是否启用
 - `supports_js_render` 是否需要 JS 渲染
 - `crawl_interval_minutes` 默认抓取间隔
@@ -67,6 +69,7 @@
 - `external_id` 源站公告 ID
 - `project_code` 项目编号
 - `dedup_hash` 聚合去重键
+- `dedup_key` Phase-3 主去重键
 - `title`
 - `notice_type`：`announcement/change/result`
 - `issuer` 招标人
@@ -90,6 +93,7 @@
 - `version_no` 版本号
 - `is_current` 是否当前版本
 - `content_hash` 版本内容哈希
+- `dedup_key` 版本归属去重键
 - `title` / `notice_type` / `issuer` / `region`
 - `published_at` / `deadline_at`
 - `budget_amount` / `budget_currency`
@@ -173,18 +177,15 @@
 - 同源存在相同 `content_hash` 且 URL 不同时，标记 `is_duplicate_content=true`
 - `notice_version` 维度按 `UNIQUE(notice_id, content_hash)` 保证同公告同内容只保留一个版本快照
 
-### 5.3 公告归并（`tender_notice.dedup_hash`）
-写入层生成稳定归并键，优先级如下：
-1. `external_id`
-2. `detail_page_url`（标准化后）
-3. `title`（标准化后）
+### 5.3 公告归并（`tender_notice.dedup_key`）
+写入层按以下规则生成稳定主去重键：
 
-最终 `dedup_hash = sha256(source_code + merge_strategy + identity_value)`。
+`dedup_key = sha256(normalized_title + published_date(day) + normalized_purchaser_or_publisher + normalized_budget_bucket + normalized_detail_locator)`
 
 说明：
-- 同 `external_id` 归并为同一公告
-- 无 `external_id` 时，同 `detail_page_url` 归并
-- 再退化到标题归并（用于弱标识来源）
+- `normalized_detail_locator` 优先使用 `guid/detail_id`，否则回退到标准化 `detail_url`
+- `source_duplicate_key` 与 `dedup_key` 同步写入，用于兼容旧链路
+- `dedup_hash` 继续保留为兼容字段
 
 ### 5.4 版本跟踪
 - 同一公告重复抓取且 `content_hash` 不变：不新增 `notice_version`

@@ -30,6 +30,27 @@
       margin-bottom: 16px;
       overflow: hidden;
     }
+    .banner {
+      border: 1px solid #fcd34d;
+      border-radius: 14px;
+      background: linear-gradient(90deg, #fff7d6 0%, #fef3c7 100%);
+      color: #92400e;
+      padding: 12px 16px;
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 14px;
+    }
+    .banner small {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      margin-top: 4px;
+    }
+    .banner.calm {
+      border-color: #bfdbfe;
+      background: linear-gradient(90deg, #eff6ff 0%, #dbeafe 100%);
+      color: #1d4ed8;
+    }
     .head {
       padding: 16px 20px;
       border-bottom: 1px solid var(--line);
@@ -44,6 +65,48 @@
       color: var(--accent);
       text-decoration: none;
       font-size: 13px;
+      white-space: nowrap;
+    }
+    .links .focus-link {
+      border: 1px solid #16a34a;
+      background: #f0fdf4;
+      color: #166534;
+      border-radius: 9px;
+      padding: 6px 10px;
+      font-weight: 800;
+    }
+    .entry-focus {
+      margin: 12px 14px 0 14px;
+      border: 1px solid #86efac;
+      border-radius: 14px;
+      background: linear-gradient(90deg, #f0fdf4 0%, #dcfce7 100%);
+      padding: 12px 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .entry-focus h2 {
+      margin: 0;
+      font-size: 16px;
+      color: #14532d;
+    }
+    .entry-focus p {
+      margin: 4px 0 0 0;
+      font-size: 12px;
+      color: #166534;
+    }
+    .entry-focus a {
+      display: inline-block;
+      border: 1px solid #15803d;
+      border-radius: 10px;
+      padding: 8px 12px;
+      background: #15803d;
+      color: #fff;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 800;
       white-space: nowrap;
     }
     .grid {
@@ -103,40 +166,76 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" ignore missing %}
   <div class="wrap">
+    {% if request.url.path == "/admin/home" %}
+    {% set breadcrumb_items = [{"label": "首页", "url": None}] %}
+    {% else %}
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "技术总览", "url": None}] %}
+    {% endif %}
+    {% include "admin/_breadcrumbs.html" ignore missing %}
     <div class="card">
       <div class="head">
         <h1>系统总览 Dashboard</h1>
         <div class="links">
-          <a href="/admin/sources">来源管理</a>
+          <a class="focus-link" href="/admin/notices">进入招标信息工作台</a>
+          <a href="/admin/source-sites">来源网站</a>
           <a href="/admin/crawl-jobs">任务看板</a>
-          <a href="/admin/notices">公告管理</a>
-          <a href="/admin/raw-documents">原文管理</a>
-          <a href="/admin/crawl-errors">错误管理</a>
         </div>
       </div>
+      <div class="entry-focus">
+        <div>
+          <h2>招标信息汇总工作台是主入口</h2>
+          <p>支持去重汇总、筛选、排序与导出，适合业务日常使用。</p>
+        </div>
+        <a href="/admin/notices">打开 /admin/notices</a>
+      </div>
+      {% if dashboard_warning %}
+      <div class="banner">
+        统计数据暂不可用，已降级为默认值。
+        <small>{{ dashboard_warning }}</small>
+      </div>
+      {% elif show_new_notice_alert %}
+      <div class="banner">
+        今日新增 {{ today_new_notices | default(0, true) }} 条，最近24小时新增 {{ recent_24h_new_notices | default(0, true) }} 条。
+        <small>可前往 <a class="link" href="/admin/notices?recent_hours=24">招标汇总清单（最近新增）</a> 继续筛选。</small>
+      </div>
+      {% else %}
+      <div class="banner calm">
+        今日暂无新增，最近24小时暂无新增。
+        <small>暂无新增</small>
+      </div>
+      {% endif %}
       <div class="grid">
         <div class="metric">
           <span class="k">source_count</span>
-          <div class="v">{{ counts.source_count }}</div>
-          <span class="chip">active={{ counts.active_source_count }}</span>
+          <div class="v">{{ counts.source_count | default(0, true) }}</div>
+          <span class="chip">active={{ counts.active_source_count | default(0, true) }}</span>
         </div>
         <div class="metric">
           <span class="k">crawl_job_count</span>
-          <div class="v">{{ counts.crawl_job_count }}</div>
-          <span class="chip">running={{ counts.crawl_job_running_count }}</span>
+          <div class="v">{{ counts.crawl_job_count | default(0, true) }}</div>
+          <span class="chip">running={{ counts.crawl_job_running_count | default(0, true) }}</span>
         </div>
         <div class="metric">
           <span class="k">notice_count</span>
-          <div class="v">{{ counts.notice_count }}</div>
+          <div class="v">{{ counts.notice_count | default(0, true) }}</div>
         </div>
         <div class="metric">
           <span class="k">raw_document_count</span>
-          <div class="v">{{ counts.raw_document_count }}</div>
+          <div class="v">{{ counts.raw_document_count | default(0, true) }}</div>
         </div>
         <div class="metric">
           <span class="k">crawl_error_count</span>
-          <div class="v">{{ counts.crawl_error_count }}</div>
+          <div class="v">{{ counts.crawl_error_count | default(0, true) }}</div>
+        </div>
+        <div class="metric">
+          <span class="k">today_new_notice_count</span>
+          <div class="v">{{ counts.today_new_notice_count | default(0, true) }}</div>
+        </div>
+        <div class="metric">
+          <span class="k">recent_24h_new_notice_count</span>
+          <div class="v">{{ counts.recent_24h_new_notice_count | default(0, true) }}</div>
         </div>
       </div>
     </div>
@@ -153,15 +252,15 @@
           </tr>
         </thead>
         <tbody>
-          {% for row in trend_rows %}
+          {% for row in trend_rows | default([], true) %}
           <tr>
-            <td>{{ row.date }}</td>
-            <td>{{ row.crawl_job_count }}</td>
-            <td>{{ row.notice_count }}</td>
-            <td>{{ row.crawl_error_count }}</td>
+            <td>{{ row.date | default("-", true) }}</td>
+            <td>{{ row.crawl_job_count | default(0, true) }}</td>
+            <td>{{ row.notice_count | default(0, true) }}</td>
+            <td>{{ row.crawl_error_count | default(0, true) }}</td>
           </tr>
           {% endfor %}
-          {% if not trend_rows %}
+          {% if not (trend_rows | default([], true)) %}
           <tr><td colspan="4" class="muted">暂无趋势数据</td></tr>
           {% endif %}
         </tbody>
@@ -184,19 +283,19 @@
           </tr>
         </thead>
         <tbody>
-          {% for item in recent_failed_or_partial_jobs %}
+          {% for item in recent_failed_or_partial_jobs | default([], true) %}
           <tr>
-            <td><a class="link" href="/admin/crawl-jobs/{{ item.id }}">{{ item.id }}</a></td>
-            <td>{{ item.source_code }}</td>
-            <td>{{ item.status }}</td>
-            <td>{{ item.job_type }}</td>
-            <td>{{ item.started_at }}</td>
-            <td>{{ item.finished_at }}</td>
-            <td>{{ item.error_count }}</td>
+            <td><a class="link" href="/admin/crawl-jobs/{{ item.id | default(0, true) }}">{{ item.id | default(0, true) }}</a></td>
+            <td>{{ item.source_code | default("-", true) }}</td>
+            <td>{{ item.status | default("-", true) }}</td>
+            <td>{{ item.job_type | default("-", true) }}</td>
+            <td>{{ item.started_at | default("-", true) }}</td>
+            <td>{{ item.finished_at | default("-", true) }}</td>
+            <td>{{ item.error_count | default(0, true) }}</td>
             <td>{{ item.message or '-' }}</td>
           </tr>
           {% endfor %}
-          {% if not recent_failed_or_partial_jobs %}
+          {% if not (recent_failed_or_partial_jobs | default([], true)) %}
           <tr><td colspan="8" class="muted">暂无失败或部分成功任务</td></tr>
           {% endif %}
         </tbody>
@@ -218,10 +317,10 @@
           </tr>
         </thead>
         <tbody>
-          {% for item in recent_crawl_errors %}
+          {% for item in recent_crawl_errors | default([], true) %}
           <tr>
-            <td><a class="link" href="/admin/crawl-errors/{{ item.id }}">{{ item.id }}</a></td>
-            <td>{{ item.source_code }}</td>
+            <td><a class="link" href="/admin/crawl-errors/{{ item.id | default(0, true) }}">{{ item.id | default(0, true) }}</a></td>
+            <td>{{ item.source_code | default("-", true) }}</td>
             <td>
               {% if item.crawl_job_id %}
               <a class="link" href="/admin/crawl-jobs/{{ item.crawl_job_id }}">{{ item.crawl_job_id }}</a>
@@ -229,13 +328,13 @@
               -
               {% endif %}
             </td>
-            <td>{{ item.stage }}</td>
-            <td>{{ item.error_type }}</td>
-            <td>{{ item.message }}</td>
-            <td>{{ item.created_at }}</td>
+            <td>{{ item.stage | default("-", true) }}</td>
+            <td>{{ item.error_type | default("-", true) }}</td>
+            <td>{{ item.message | default("-", true) }}</td>
+            <td>{{ item.created_at | default("-", true) }}</td>
           </tr>
           {% endfor %}
-          {% if not recent_crawl_errors %}
+          {% if not (recent_crawl_errors | default([], true)) %}
           <tr><td colspan="7" class="muted">暂无错误事件</td></tr>
           {% endif %}
         </tbody>

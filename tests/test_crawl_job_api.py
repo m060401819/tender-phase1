@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 import app.models  # noqa: F401
 from app.db.base import Base
 from app.db.session import get_db
+from app.api.endpoints.sources import get_crawl_command_runner
 from app.main import app
 from app.models import CrawlError
 from app.services import CrawlJobService
@@ -22,6 +23,16 @@ class SeededJobs:
     running_job_id: int
     partial_job_id: int
     pending_job_id: int
+
+
+class StubRunner:
+    def __init__(self, return_code: int = 0) -> None:
+        self.return_code = return_code
+        self.commands: list[list[str]] = []
+
+    def run(self, command: list[str], *, cwd: Path) -> int:
+        self.commands.append(command)
+        return self.return_code
 
 
 
@@ -133,13 +144,14 @@ def _seed_jobs(session_factory: sessionmaker) -> SeededJobs:
 
 
 
-def _build_client(tmp_path: Path) -> tuple[TestClient, SeededJobs, object]:
+def _build_client(tmp_path: Path) -> tuple[TestClient, SeededJobs, sessionmaker, StubRunner, object]:
     db_url = f"sqlite+pysqlite:///{tmp_path / 'crawl_job_api.db'}"
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
 
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
     seeded = _seed_jobs(session_factory)
+    runner = StubRunner(return_code=0)
 
     def override_get_db():
         db = session_factory()
@@ -149,14 +161,15 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, SeededJobs, object]:
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_crawl_command_runner] = lambda: runner
     client = TestClient(app)
 
-    return client, seeded, engine
+    return client, seeded, session_factory, runner, engine
 
 
 
 def test_crawl_job_list_filters_sort_and_pagination(tmp_path: Path) -> None:
-    client, seeded, engine = _build_client(tmp_path)
+    client, seeded, _, _, engine = _build_client(tmp_path)
     try:
         by_source = client.get("/crawl-jobs", params={"source_code": "anhui_ggzy_zfcg"})
         assert by_source.status_code == 200
@@ -193,7 +206,7 @@ def test_crawl_job_list_filters_sort_and_pagination(tmp_path: Path) -> None:
 
 
 def test_crawl_job_list_default_order_by_started_at_desc(tmp_path: Path) -> None:
-    client, seeded, engine = _build_client(tmp_path)
+    client, seeded, _, _, engine = _build_client(tmp_path)
     try:
         response = client.get("/crawl-jobs", params={"limit": 4, "offset": 0})
         assert response.status_code == 200
@@ -214,7 +227,7 @@ def test_crawl_job_list_default_order_by_started_at_desc(tmp_path: Path) -> None
 
 
 def test_crawl_job_detail_returns_core_fields_and_recent_error_count(tmp_path: Path) -> None:
-    client, seeded, engine = _build_client(tmp_path)
+    client, seeded, _, _, engine = _build_client(tmp_path)
     try:
         response = client.get(f"/crawl-jobs/{seeded.partial_job_id}")
         assert response.status_code == 200
@@ -230,9 +243,101 @@ def test_crawl_job_detail_returns_core_fields_and_recent_error_count(tmp_path: P
         assert payload["deduplicated_count"] == 1
         assert payload["error_count"] == 2
         assert payload["recent_crawl_error_count"] == 1
+        assert payload["list_items_seen"] == 0
+        assert payload["list_items_unique"] == 0
+        assert payload["list_items_source_duplicates_skipped"] == 0
+        assert payload["detail_pages_fetched"] == 0
+        assert payload["records_inserted"] == 0
+        assert payload["records_updated"] == 0
+        assert payload["source_duplicates_suppressed"] == 0
 
         not_found = client.get("/crawl-jobs/999999")
         assert not_found.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def _seed_failed_job_for_retry(session_factory: sessionmaker) -> int:
+    now = datetime.now(timezone.utc)
+    service = CrawlJobService(session_factory=session_factory)
+    failed = service.create_job(
+        source_code="anhui_ggzy_zfcg",
+        job_type="manual",
+        triggered_by="test",
+    )
+    service.start_job(failed.id, started_at=now - timedelta(hours=2))
+    service.record_stats(
+        failed.id,
+        pages_fetched=1,
+        documents_saved=1,
+        notices_upserted=0,
+        deduplicated_count=0,
+        error_count=1,
+    )
+    service.finish_job(
+        failed.id,
+        status="failed",
+        finished_at=now - timedelta(hours=1),
+    )
+    return failed.id
+
+
+def test_crawl_job_retry_failed_job_creates_one_manual_retry(tmp_path: Path) -> None:
+    client, _, session_factory, runner, engine = _build_client(tmp_path)
+    try:
+        failed_job_id = _seed_failed_job_for_retry(session_factory)
+        response = client.post(f"/crawl-jobs/{failed_job_id}/retry", json={"triggered_by": "api-retry"})
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["original_job_id"] == failed_job_id
+        assert payload["retry_job"]["job_type"] == "manual_retry"
+        assert payload["retry_job"]["retry_of_job_id"] == failed_job_id
+        assert payload["retry_job"]["status"] == "succeeded"
+        assert payload["return_code"] == 0
+        assert len(runner.commands) == 1
+
+        duplicate = client.post(f"/crawl-jobs/{failed_job_id}/retry", json={"triggered_by": "api-retry"})
+        assert duplicate.status_code == 400
+        assert duplicate.json()["detail"] == "job already retried"
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_crawl_job_retry_partial_job_is_allowed(tmp_path: Path) -> None:
+    client, seeded, _, runner, engine = _build_client(tmp_path)
+    try:
+        response = client.post(f"/crawl-jobs/{seeded.partial_job_id}/retry", json={"triggered_by": "api-retry"})
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["original_job_id"] == seeded.partial_job_id
+        assert payload["retry_job"]["job_type"] == "manual_retry"
+        assert payload["retry_job"]["retry_of_job_id"] == seeded.partial_job_id
+        assert payload["retry_job"]["status"] == "succeeded"
+        assert len(runner.commands) == 1
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_crawl_job_retry_succeeded_job_is_rejected(tmp_path: Path) -> None:
+    client, seeded, _, _, engine = _build_client(tmp_path)
+    try:
+        response = client.post(f"/crawl-jobs/{seeded.succeeded_job_id}/retry", json={"triggered_by": "api-retry"})
+        assert response.status_code == 400
+        assert response.json()["detail"] == "only failed or partial job can be retried"
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_crawl_job_retry_not_found_returns_404(tmp_path: Path) -> None:
+    client, _, _, _, engine = _build_client(tmp_path)
+    try:
+        response = client.post("/crawl-jobs/999999/retry", json={"triggered_by": "api-retry"})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "crawl_job not found"
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

@@ -10,3 +10,4 @@ dist/
 data/raw/
 data/staging/
 crawler/data/
+logs/*.log

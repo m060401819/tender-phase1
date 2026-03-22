@@ -18,6 +18,7 @@ class CrawlJobType(str, Enum):
     manual = "manual"
     scheduled = "scheduled"
     backfill = "backfill"
+    manual_retry = "manual_retry"
 
 
 class CrawlJobOrderBy(str, Enum):
@@ -31,6 +32,12 @@ class CrawlJobBaseResponse(BaseModel):
     source_code: str
     job_type: CrawlJobType
     status: CrawlJobStatus
+    retry_of_job_id: int | None = None
+    retry_of_job_message: str | None = None
+    retried_by_job_id: int | None = None
+    retried_by_status: CrawlJobStatus | None = None
+    retried_by_finished_at: datetime | None = None
+    retried_by_message: str | None = None
     started_at: datetime | None
     finished_at: datetime | None
 
@@ -39,6 +46,13 @@ class CrawlJobBaseResponse(BaseModel):
     notices_upserted: int
     deduplicated_count: int
     error_count: int
+    list_items_seen: int
+    list_items_unique: int
+    list_items_source_duplicates_skipped: int
+    detail_pages_fetched: int
+    records_inserted: int
+    records_updated: int
+    source_duplicates_suppressed: int
 
     message: str | None
 
@@ -57,3 +71,15 @@ class CrawlJobListResponse(BaseModel):
 
 class CrawlJobDetailResponse(CrawlJobBaseResponse):
     recent_crawl_error_count: int | None = None
+
+
+class CrawlJobRetryRequest(BaseModel):
+    max_pages: int | None = Field(default=None, ge=1)
+    triggered_by: str = Field(default="api-retry", min_length=1, max_length=64)
+
+
+class CrawlJobRetryResponse(BaseModel):
+    original_job_id: int
+    retry_job: CrawlJobListItemResponse
+    return_code: int
+    command: str

@@ -1,0 +1,79 @@
+<style>
+  .admin-top-nav {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid #dbe3ef;
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+  }
+  .admin-top-nav .inner {
+    max-width: 1520px;
+    margin: 0 auto;
+    padding: 10px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .admin-top-nav .brand {
+    margin-right: 6px;
+    color: #0f172a;
+    font-size: 13px;
+    font-weight: 800;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .admin-top-nav .nav-link {
+    display: inline-block;
+    padding: 6px 10px;
+    border-radius: 9px;
+    border: 1px solid #d1d5db;
+    color: #334155;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 700;
+    background: #fff;
+    white-space: nowrap;
+  }
+  .admin-top-nav .nav-link:hover {
+    border-color: #94a3b8;
+  }
+  .admin-top-nav .nav-link.is-active {
+    border-color: #0f766e;
+    background: #ecfdf5;
+    color: #0f766e;
+  }
+  .admin-top-nav .nav-link.is-primary {
+    border-color: #16a34a;
+    background: #f0fdf4;
+    color: #166534;
+  }
+  .admin-top-nav .nav-link.is-primary.is-active {
+    border-color: #15803d;
+    background: #dcfce7;
+    color: #14532d;
+  }
+  @media (max-width: 760px) {
+    .admin-top-nav .brand {
+      width: 100%;
+      margin-bottom: 4px;
+    }
+  }
+</style>
+{% set current_path = request.url.path %}
+<nav class="admin-top-nav">
+  <div class="inner">
+    <a class="brand" href="/admin/home">Tender Admin</a>
+    <a class="nav-link {% if current_path == '/admin/home' %}is-active{% endif %}" href="/admin/home">首页</a>
+    <a class="nav-link is-primary {% if current_path.startswith('/admin/notices') %}is-active{% endif %}" href="/admin/notices">招标信息工作台</a>
+    <a class="nav-link {% if current_path.startswith('/admin/source-sites') or current_path.startswith('/admin/sources') %}is-active{% endif %}" href="/admin/source-sites">来源网站</a>
+    <a class="nav-link {% if current_path.startswith('/admin/sources') %}is-active{% endif %}" href="/admin/sources">来源配置</a>
+    <a class="nav-link {% if current_path.startswith('/admin/dashboard') %}is-active{% endif %}" href="/admin/dashboard">技术总览</a>
+    <a class="nav-link {% if current_path.startswith('/admin/crawl-jobs') %}is-active{% endif %}" href="/admin/crawl-jobs">抓取任务</a>
+    <a class="nav-link {% if current_path.startswith('/admin/crawl-errors') %}is-active{% endif %}" href="/admin/crawl-errors">抓取错误</a>
+    <a class="nav-link {% if current_path.startswith('/admin/raw-documents') %}is-active{% endif %}" href="/admin/raw-documents">原文归档</a>
+    <a class="nav-link {% if current_path.startswith('/admin/settings/health-rules') %}is-active{% endif %}" href="/admin/settings/health-rules">健康规则</a>
+  </div>
+</nav>

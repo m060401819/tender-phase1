@@ -44,6 +44,8 @@ class RawDocumentItem(BaseCrawlItem):
     charset = scrapy.Field()
     title = scrapy.Field()
     content_length = scrapy.Field()
+    source_duplicate_key = scrapy.Field()
+    source_list_item_fingerprint = scrapy.Field()
     extra_meta = scrapy.Field()
 
 
@@ -53,6 +55,9 @@ class TenderNoticeItem(BaseCrawlItem):
     external_id = scrapy.Field()
     project_code = scrapy.Field()
     dedup_hash = scrapy.Field()
+    dedup_key = scrapy.Field()
+    source_duplicate_key = scrapy.Field()
+    source_list_item_fingerprint = scrapy.Field()
 
     title = scrapy.Field()
     notice_type = scrapy.Field()
@@ -80,6 +85,9 @@ class NoticeVersionItem(BaseCrawlItem):
 
     notice_dedup_hash = scrapy.Field()
     notice_external_id = scrapy.Field()
+    dedup_key = scrapy.Field()
+    source_duplicate_key = scrapy.Field()
+    source_list_item_fingerprint = scrapy.Field()
 
     version_no = scrapy.Field()
     is_current = scrapy.Field()

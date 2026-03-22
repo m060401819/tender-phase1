@@ -86,7 +86,23 @@ def _seed_data(session_factory: sessionmaker) -> None:
             error_count=1,
             message="admin job 3",
         )
-        session.add_all([job_1, job_2, job_3])
+        job_4 = CrawlJob(
+            id=804,
+            source_site_id=source_anhui.id,
+            job_type="manual_retry",
+            status="succeeded",
+            triggered_by="admin-retry",
+            retry_of_job_id=job_2.id,
+            started_at=now - timedelta(minutes=50),
+            finished_at=now - timedelta(minutes=40),
+            pages_fetched=1,
+            documents_saved=1,
+            notices_upserted=0,
+            deduplicated_count=0,
+            error_count=0,
+            message="retry fixed",
+        )
+        session.add_all([job_1, job_2, job_3, job_4])
 
         raw_doc = RawDocument(
             id=401,
@@ -231,8 +247,13 @@ def test_admin_crawl_error_list_page_supports_filters_and_pagination(tmp_path: P
         response = client.get("/admin/crawl-errors")
         assert response.status_code == 200
         assert "抓取错误列表" in response.text
+        assert "最近失败原因（按来源聚合，近7天）" in response.text
+        assert "最近重试" in response.text
+        assert "anhui_ggzy_zfcg" in response.text
+        assert "example_source" in response.text
         assert "/admin/crawl-errors/601" in response.text
         assert "/admin/crawl-errors/603" in response.text
+        assert "/admin/crawl-jobs/804" in response.text
 
         filtered = client.get(
             "/admin/crawl-errors",
@@ -246,6 +267,8 @@ def test_admin_crawl_error_list_page_supports_filters_and_pagination(tmp_path: P
         assert filtered.status_code == 200
         assert "request timeout admin" in filtered.text
         assert "upsert conflict admin" not in filtered.text
+        assert "/admin/crawl-errors/602" in filtered.text
+        assert "/admin/crawl-errors/603" not in filtered.text
 
         paged = client.get("/admin/crawl-errors", params={"limit": 1, "offset": 1})
         assert paged.status_code == 200
@@ -266,6 +289,8 @@ def test_admin_crawl_error_detail_page_shows_full_info_and_related_entities(tmp_
         assert "Traceback (most recent call last): parser admin" in response.text
         assert "/admin/raw-documents/401" in response.text
         assert "/admin/notices/101" in response.text
+        assert "latest_retry_status" in response.text
+        assert "/admin/crawl-jobs/804" in response.text
         assert '"error_type": "ParserError"' in response.text
 
         not_found = client.get("/admin/crawl-errors/999999")

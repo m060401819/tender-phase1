@@ -40,6 +40,27 @@
     }
     h1 { margin: 0; font-size: 20px; }
     .meta { color: var(--muted); font-size: 13px; }
+    .summary {
+      margin: 12px 20px;
+      border: 1px solid #fde68a;
+      border-radius: 12px;
+      background: #fffbeb;
+      padding: 10px 12px;
+    }
+    .summary h2 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: #92400e;
+    }
+    .summary ul {
+      margin: 0;
+      padding-left: 18px;
+      color: #78350f;
+      font-size: 13px;
+    }
+    .summary li {
+      margin: 4px 0;
+    }
     form {
       display: grid;
       grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -115,11 +136,36 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "抓取错误列表", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
     <div class="card">
       <div class="head">
         <h1>抓取错误列表</h1>
-        <div class="meta">/admin/crawl-errors</div>
+        <div class="meta"><a href="/admin/home" style="color:#b45309;text-decoration:none;">返回首页</a> /admin/crawl-errors</div>
+      </div>
+      <div class="summary">
+        <h2>最近失败原因（按来源聚合，近7天）</h2>
+        {% if source_summaries %}
+        <ul>
+          {% for item in source_summaries %}
+          <li>
+            <strong>{{ item.source_code }}</strong>：{{ item.recent_error_count }} 条，
+            最近：{{ item.latest_error_message }}（{{ item.latest_error_created_at }}）
+            <a class="link" href="/admin/crawl-errors/{{ item.latest_error_id }}">查看详情 #{{ item.latest_error_id }}</a>
+            ，最近重试：
+            {% if item.last_retry_job_id %}
+            {{ item.last_retry_status or '-' }}（<a class="link" href="/admin/crawl-jobs/{{ item.last_retry_job_id }}">任务 #{{ item.last_retry_job_id }}</a>）
+            {% else %}
+            无
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="muted">最近7天暂无错误摘要</div>
+        {% endif %}
       </div>
 
       <form method="get" action="/admin/crawl-errors">

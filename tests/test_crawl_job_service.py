@@ -29,6 +29,13 @@ def test_crawl_job_create_supports_all_job_types(tmp_path: Path) -> None:
             assert job.notices_upserted == 0
             assert job.deduplicated_count == 0
             assert job.error_count == 0
+            assert job.list_items_seen == 0
+            assert job.list_items_unique == 0
+            assert job.list_items_source_duplicates_skipped == 0
+            assert job.detail_pages_fetched == 0
+            assert job.records_inserted == 0
+            assert job.records_updated == 0
+            assert job.source_duplicates_suppressed == 0
     finally:
         service.close()
 
@@ -51,6 +58,13 @@ def test_crawl_job_start_record_stats_and_finish_success(tmp_path: Path) -> None
             notices_upserted=3,
             deduplicated_count=2,
             error_count=0,
+            list_items_seen=12,
+            list_items_unique=10,
+            list_items_source_duplicates_skipped=2,
+            detail_pages_fetched=10,
+            records_inserted=14,
+            records_updated=3,
+            source_duplicates_suppressed=1,
         )
         assert updated is not None
         assert updated.pages_fetched == 7
@@ -58,6 +72,13 @@ def test_crawl_job_start_record_stats_and_finish_success(tmp_path: Path) -> None
         assert updated.notices_upserted == 3
         assert updated.deduplicated_count == 2
         assert updated.error_count == 0
+        assert updated.list_items_seen == 12
+        assert updated.list_items_unique == 10
+        assert updated.list_items_source_duplicates_skipped == 2
+        assert updated.detail_pages_fetched == 10
+        assert updated.records_inserted == 14
+        assert updated.records_updated == 3
+        assert updated.source_duplicates_suppressed == 1
 
         finished = service.finish_job(created.id)
         assert finished is not None

@@ -76,7 +76,10 @@
   </style>
 </head>
 <body>
+  {% include "admin/_top_nav.html" %}
   <div class="wrap">
+    {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "来源管理", "url": None}] %}
+    {% include "admin/_breadcrumbs.html" %}
     <div class="card">
       <div class="head">
         <div>
@@ -84,6 +87,8 @@
           <div class="meta">/admin/sources</div>
         </div>
         <div class="links">
+          <a href="/admin/sources/new">新增来源网站</a>
+          <a href="/admin/notices">招标信息工作台</a>
           <a href="/admin/crawl-jobs">任务看板</a>
         </div>
       </div>

@@ -5,6 +5,7 @@ from app.repositories import (
     CrawlErrorListResult,
     CrawlErrorQueryFilters,
     CrawlErrorRepository,
+    CrawlErrorSourceSummaryRecord,
 )
 
 
@@ -37,3 +38,24 @@ class CrawlErrorQueryService:
 
     def get_crawl_error_detail(self, error_id: int) -> CrawlErrorDetailRecord | None:
         return self.repository.get_error_detail(error_id)
+
+    def list_recent_source_summaries(
+        self,
+        *,
+        source_code: str | None,
+        stage: str | None,
+        crawl_job_id: int | None,
+        error_type: str | None,
+        recent_days: int = 7,
+        limit: int = 20,
+    ) -> list[CrawlErrorSourceSummaryRecord]:
+        return self.repository.list_recent_source_summaries(
+            filters=CrawlErrorQueryFilters(
+                source_code=source_code,
+                stage=stage,
+                crawl_job_id=crawl_job_id,
+                error_type=error_type,
+            ),
+            recent_days=recent_days,
+            limit=limit,
+        )

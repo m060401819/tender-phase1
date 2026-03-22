@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from io import StringIO
+from io import BytesIO, StringIO
 
 from fastapi.encoders import jsonable_encoder
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
+from openpyxl import Workbook
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
@@ -33,7 +34,13 @@ def list_notices(
     source_code: str | None = Query(default=None),
     notice_type: NoticeType | None = Query(default=None),
     region: str | None = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=200),
+    recent_hours: int | None = Query(default=None, ge=1, le=720),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    dedup: bool = Query(default=True),
+    sort_by: str = Query(default="published_at"),
+    sort_order: str = Query(default="desc"),
+    limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> NoticeListResponse:
@@ -42,6 +49,12 @@ def list_notices(
         source_code=source_code,
         notice_type=notice_type.value if notice_type else None,
         region=region,
+        recent_hours=recent_hours,
+        date_from=date_from,
+        date_to=date_to,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
         limit=limit,
         offset=offset,
     )
@@ -60,13 +73,26 @@ def export_notices_csv(
     source_code: str | None = Query(default=None),
     notice_type: NoticeType | None = Query(default=None),
     region: str | None = Query(default=None),
+    recent_hours: int | None = Query(default=None, ge=1, le=720),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    dedup: bool = Query(default=True),
+    sort_by: str = Query(default="published_at"),
+    sort_order: str = Query(default="desc"),
     db: Session = Depends(get_db),
 ) -> Response:
-    items = _build_notice_service(db).list_notices_for_export(
+    items = _load_notice_export_items(
+        db=db,
         keyword=keyword,
         source_code=source_code,
         notice_type=notice_type.value if notice_type else None,
         region=region,
+        recent_hours=recent_hours,
+        date_from=date_from,
+        date_to=date_to,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     headers = [
         "id",
@@ -112,13 +138,26 @@ def export_notices_json(
     source_code: str | None = Query(default=None),
     notice_type: NoticeType | None = Query(default=None),
     region: str | None = Query(default=None),
+    recent_hours: int | None = Query(default=None, ge=1, le=720),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    dedup: bool = Query(default=True),
+    sort_by: str = Query(default="published_at"),
+    sort_order: str = Query(default="desc"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    items = _build_notice_service(db).list_notices_for_export(
+    items = _load_notice_export_items(
+        db=db,
         keyword=keyword,
         source_code=source_code,
         notice_type=notice_type.value if notice_type else None,
         region=region,
+        recent_hours=recent_hours,
+        date_from=date_from,
+        date_to=date_to,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     payload = [
         {
@@ -138,6 +177,74 @@ def export_notices_json(
     return JSONResponse(
         content=jsonable_encoder(payload),
         media_type="application/json",
+    )
+
+
+@router.get("/notices/export.xlsx")
+def export_notices_xlsx(
+    keyword: str | None = Query(default=None),
+    source_code: str | None = Query(default=None),
+    notice_type: NoticeType | None = Query(default=None),
+    region: str | None = Query(default=None),
+    recent_hours: int | None = Query(default=None, ge=1, le=720),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    dedup: bool = Query(default=True),
+    sort_by: str = Query(default="published_at"),
+    sort_order: str = Query(default="desc"),
+    db: Session = Depends(get_db),
+) -> Response:
+    items = _load_notice_export_items(
+        db=db,
+        keyword=keyword,
+        source_code=source_code,
+        notice_type=notice_type.value if notice_type else None,
+        region=region,
+        recent_hours=recent_hours,
+        date_from=date_from,
+        date_to=date_to,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    headers = [
+        "id",
+        "source_code",
+        "title",
+        "notice_type",
+        "issuer",
+        "region",
+        "published_at",
+        "deadline_at",
+        "budget_amount",
+        "current_version_id",
+    ]
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "notices"
+    sheet.append(headers)
+    for item in items:
+        sheet.append(
+            [
+                item.id,
+                item.source_code,
+                item.title,
+                item.notice_type,
+                item.issuer or "",
+                item.region or "",
+                _export_csv_datetime(item.published_at),
+                _export_csv_datetime(item.deadline_at),
+                _export_csv_decimal(item.budget_amount),
+                item.current_version_id if item.current_version_id is not None else "",
+            ]
+        )
+
+    output = BytesIO()
+    workbook.save(output)
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="notices.xlsx"'},
     )
 
 
@@ -231,10 +338,39 @@ def _build_notice_service(db: Session) -> NoticeQueryService:
     return NoticeQueryService(repository=NoticeRepository(db))
 
 
+def _load_notice_export_items(
+    *,
+    db: Session,
+    keyword: str | None,
+    source_code: str | None,
+    notice_type: str | None,
+    region: str | None,
+    recent_hours: int | None,
+    date_from: date | None,
+    date_to: date | None,
+    dedup: bool,
+    sort_by: str,
+    sort_order: str,
+) -> list[NoticeListItemRecord]:
+    return _build_notice_service(db).list_notices_for_export(
+        keyword=keyword,
+        source_code=source_code,
+        notice_type=notice_type,
+        region=region,
+        recent_hours=recent_hours,
+        date_from=date_from,
+        date_to=date_to,
+        dedup=dedup,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+
 def _to_notice_list_item_response(item: NoticeListItemRecord) -> NoticeListItemResponse:
     return NoticeListItemResponse(
         id=item.id,
         source_code=item.source_code,
+        source_name=item.source_name,
         title=item.title,
         notice_type=item.notice_type,
         issuer=item.issuer,
@@ -243,6 +379,8 @@ def _to_notice_list_item_response(item: NoticeListItemRecord) -> NoticeListItemR
         deadline_at=item.deadline_at,
         budget_amount=item.budget_amount,
         current_version_id=item.current_version_id,
+        duplicate_count=item.duplicate_count,
+        is_recent_new=item.is_recent_new,
     )
 
 

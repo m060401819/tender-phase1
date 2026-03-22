@@ -70,6 +70,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededAdminNotices:
             first_published_at=now - timedelta(days=2),
             latest_published_at=now - timedelta(days=1, hours=20),
             current_version_id=None,
+            created_at=now - timedelta(days=2),
+            updated_at=now - timedelta(days=2),
         )
         notice_2 = TenderNotice(
             id=102,
@@ -89,6 +91,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededAdminNotices:
             first_published_at=now - timedelta(days=1),
             latest_published_at=now - timedelta(days=1),
             current_version_id=None,
+            created_at=now - timedelta(hours=30),
+            updated_at=now - timedelta(hours=30),
         )
         notice_3 = TenderNotice(
             id=103,
@@ -108,6 +112,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededAdminNotices:
             first_published_at=now - timedelta(days=3),
             latest_published_at=now - timedelta(days=3),
             current_version_id=None,
+            created_at=now - timedelta(days=3),
+            updated_at=now - timedelta(days=3),
         )
         session.add_all([notice_1, notice_2, notice_3])
 
@@ -170,6 +176,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededAdminNotices:
             budget_currency="CNY",
             structured_data={"source": "anhui", "version": 1},
             change_summary=None,
+            created_at=now - timedelta(days=2),
+            updated_at=now - timedelta(days=2),
         )
         version_2 = NoticeVersion(
             id=204,
@@ -188,6 +196,8 @@ def _seed_data(session_factory: sessionmaker) -> SeededAdminNotices:
             budget_currency="CNY",
             structured_data={"source": "anhui", "version": 2},
             change_summary="补充参数",
+            created_at=now - timedelta(hours=3),
+            updated_at=now - timedelta(hours=3),
         )
         session.add_all([version_1, version_2])
 
@@ -265,17 +275,75 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, SeededAdminNotices, objec
     return client, seeded, engine
 
 
+def _insert_cross_source_duplicate_notice(engine: object) -> int:
+    now = datetime.now(timezone.utc)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    with session_factory() as session:
+        duplicate_notice = TenderNotice(
+            id=104,
+            source_site_id=2,
+            external_id="EX-DUP-ADMIN-001",
+            project_code="ADMIN-DUP-001",
+            dedup_hash="dedup-ah-001",
+            title="低压透明化改造项目公告（跨来源重复）",
+            notice_type="announcement",
+            issuer="华东采购中心",
+            region="合肥",
+            published_at=now,
+            deadline_at=now + timedelta(days=4),
+            budget_amount=Decimal("900000.00"),
+            budget_currency="CNY",
+            summary="admin duplicate",
+            first_published_at=now,
+            latest_published_at=now,
+            current_version_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(duplicate_notice)
+        session.commit()
+        return int(duplicate_notice.id)
+
+
 
 def test_admin_notices_list_page_supports_filter_and_pagination(tmp_path: Path) -> None:
     client, seeded, engine = _build_client(tmp_path)
     try:
+        duplicate_notice_id = _insert_cross_source_duplicate_notice(engine)
+
         response = client.get("/admin/notices")
         assert response.status_code == 200
-        assert "公告列表" in response.text
-        assert f"/admin/notices/{seeded.notice_1_id}" in response.text
+        assert "招标信息汇总工作台" in response.text
+        assert "关键词（标题/发布方/地区）" in response.text
+        assert "最近新增：全部" in response.text
+        assert "默认去重汇总展示" in response.text
+        assert "当前展示模式：去重总展示" in response.text
+        assert "原始抓取数" in response.text
+        assert "去重后数" in response.text
+        assert "最近24小时新增数" in response.text
+        assert "查看版本/重复项" in response.text
+        assert f"/admin/notices/{duplicate_notice_id}" in response.text
         assert f"/admin/notices/{seeded.notice_2_id}" in response.text
-        assert 'href="/notices/export.csv"' in response.text
-        assert 'href="/notices/export.json"' in response.text
+        assert 'href="/notices/export.csv?' in response.text
+        assert 'href="/notices/export.json?' in response.text
+        assert 'href="/notices/export.xlsx?' in response.text
+        assert "低压透明化改造项目公告（跨来源重复）" in response.text
+        assert "低压透明化改造项目公告</div>" not in response.text
+
+        no_dedup = client.get("/admin/notices", params={"dedup": "false"})
+        assert no_dedup.status_code == 200
+        assert "当前展示模式：版本明细展示" in no_dedup.text
+        assert f"/admin/notices/{seeded.notice_1_id}" in no_dedup.text
+        assert f"/admin/notices/{duplicate_notice_id}" in no_dedup.text
+
+        sorted_by_budget = client.get("/admin/notices", params={"sort_by": "budget_amount", "sort_order": "desc"})
+        assert sorted_by_budget.status_code == 200
+        body = sorted_by_budget.text
+        first_idx = body.find("900000.00")
+        second_idx = body.find("800000.00")
+        third_idx = body.find("560000.00")
+        assert first_idx != -1 and second_idx != -1 and third_idx != -1
+        assert first_idx < second_idx < third_idx
 
         filtered = client.get(
             "/admin/notices",
@@ -289,14 +357,24 @@ def test_admin_notices_list_page_supports_filter_and_pagination(tmp_path: Path) 
         assert filtered.status_code == 200
         assert "低压透明化改造项目公告" in filtered.text
         assert "负荷管理平台采购结果公示" not in filtered.text
-        assert (
-            "/notices/export.csv?keyword=%E4%BD%8E%E5%8E%8B&amp;source_code=anhui_ggzy_zfcg&amp;"
-            "notice_type=announcement&amp;region=%E5%90%88%E8%82%A5"
-        ) in filtered.text
-        assert (
-            "/notices/export.json?keyword=%E4%BD%8E%E5%8E%8B&amp;source_code=anhui_ggzy_zfcg&amp;"
-            "notice_type=announcement&amp;region=%E5%90%88%E8%82%A5"
-        ) in filtered.text
+        assert "keyword=%E4%BD%8E%E5%8E%8B" in filtered.text
+        assert "source_code=anhui_ggzy_zfcg" in filtered.text
+        assert "notice_type=announcement" in filtered.text
+        assert "region=%E5%90%88%E8%82%A5" in filtered.text
+        assert "sort_by=published_at" in filtered.text
+        assert "sort_order=desc" in filtered.text
+
+        recent = client.get("/admin/notices", params={"recent_hours": 24})
+        assert recent.status_code == 200
+        assert "最近24小时新增筛选中" in recent.text
+        assert "查看全部" in recent.text
+        assert f"/admin/notices/{duplicate_notice_id}" in recent.text
+        assert f"/admin/notices/{seeded.notice_2_id}" not in recent.text
+        assert f"/admin/notices/{seeded.notice_3_id}" not in recent.text
+        assert 'href="/notices/export.csv?recent_hours=24' in recent.text
+        assert 'href="/notices/export.json?recent_hours=24' in recent.text
+        assert 'href="/notices/export.xlsx?recent_hours=24' in recent.text
+        assert "最近新增" in recent.text
 
         paged = client.get(
             "/admin/notices",
@@ -304,7 +382,6 @@ def test_admin_notices_list_page_supports_filter_and_pagination(tmp_path: Path) 
         )
         assert paged.status_code == 200
         assert "total=3 | limit=1 | offset=1" in paged.text
-        assert f"/admin/notices/{seeded.notice_1_id}" in paged.text
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
@@ -318,6 +395,8 @@ def test_admin_notice_detail_page_shows_versions_raw_document_and_attachment_ver
         assert response.status_code == 200
         assert f"公告详情 #{seeded.notice_1_id}" in response.text
         assert "来源信息" in response.text
+        assert "版本/重复记录" in response.text
+        assert "该公告共" in response.text
         assert "当前版本" in response.text
         assert "历史版本" in response.text
         assert "版本查看器" in response.text
