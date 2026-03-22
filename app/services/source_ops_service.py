@@ -43,6 +43,11 @@ class SourceOpsService:
         source_code: str | None = None,
         source_codes: list[str] | None = None,
     ) -> list[SourceOpsSummary]:
+        from app.services.crawl_job_service import reconcile_expired_jobs_in_session
+
+        expired_jobs = reconcile_expired_jobs_in_session(self.session)
+        if expired_jobs:
+            self.session.commit()
         if recent_hours < 1:
             raise ValueError("recent_hours must be >= 1")
         if source_codes is not None and len(source_codes) == 0:

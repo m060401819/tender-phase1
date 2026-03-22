@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
 
@@ -15,13 +16,25 @@ from app.api.endpoints.sources import (
     get_source_crawl_trigger_service,
     get_source_site_service,
 )
-from app.api.schemas import SourceCrawlJobTriggerRequest, SourceSiteCreateRequest, SourceSitePatchRequest
+from app.api.schemas import (
+    SourceCrawlJobTriggerRequest,
+    SourceSiteAdminActiveCrawl,
+    SourceSiteAdminRow,
+    SourceSiteAdminRowActions,
+    SourceSiteCreateRequest,
+    SourceSitePatchRequest,
+    SourceSitesAdminPageViewModel,
+)
+from app.core.auth import AuthenticatedUser, UserRole, get_current_user, has_required_role, require_admin_user
+from app.core.logging import build_log_extra
 from app.db.session import get_db
 from app.models import CrawlJob, SourceSite
 from app.repositories import SourceSiteRepository
 from app.services import (
     CrawlCommandRunner,
-    SourceCrawlTriggerResult,
+    CrawlJobService,
+    SourceActiveCrawlJobConflictError,
+    SourceCrawlEnqueueResult,
     SourceCrawlTriggerService,
     SourceHealthService,
     SourceOpsService,
@@ -32,9 +45,11 @@ from app.services import (
     sync_source_schedule,
 )
 from app.services.crawl_job_progress_service import ACTIVE_CRAWL_JOB_STATUSES, build_crawl_job_progress
+from app.services.crawl_job_service import reconcile_expired_jobs_in_session
 
 router = APIRouter(tags=["admin-sources"])
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
+LOGGER = logging.getLogger(__name__)
 
 _BOOL_TRUE_SET = {"1", "true", "yes", "on"}
 _BOOL_FALSE_SET = {"0", "false", "no", "off"}
@@ -59,7 +74,7 @@ def _parse_form_positive_int(value: str, *, field_name: str) -> int:
     return number
 
 
-@router.get("/admin/sources", response_class=HTMLResponse)
+@router.get("/admin/sources", response_class=HTMLResponse, dependencies=[Depends(require_admin_user)])
 def admin_sources_list(
     request: Request,
     service: SourceSiteService = Depends(get_source_site_service),
@@ -90,6 +105,7 @@ def admin_product_source_sites_list(
     request: Request,
     service: SourceSiteService = Depends(get_source_site_service),
     db: Session = Depends(get_db),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HTMLResponse:
     stats_payload = get_stats_overview(db=db)
     source_items = service.list_sources()
@@ -126,24 +142,28 @@ def admin_product_source_sites_list(
         for source in source_items
     ]
 
+    page = SourceSitesAdminPageViewModel(
+        today_new_notice_count=stats_payload.today_new_notice_count,
+        recent_24h_new_notice_count=stats_payload.recent_24h_new_notice_count,
+        show_new_notice_alert=stats_payload.recent_24h_new_notice_count > 0,
+        sources=source_rows,
+        source_ops_report_url="/reports/source-ops.xlsx?recent_hours=24",
+        created_source_success=request.query_params.get("created") == "1",
+        created_source_code=request.query_params.get("created_code") or "",
+        manual_crawl_error=request.query_params.get("manual_crawl_error") or "",
+        manual_crawl_error_source_code=request.query_params.get("source_code") or "",
+        active_crawl_job_count=len(active_crawl_map),
+        auto_refresh_interval_seconds=5,
+        can_manage_sources=has_required_role(current_user.role, UserRole.admin),
+    )
     context = {
         "request": request,
-        "today_new_notice_count": stats_payload.today_new_notice_count,
-        "recent_24h_new_notice_count": stats_payload.recent_24h_new_notice_count,
-        "show_new_notice_alert": stats_payload.recent_24h_new_notice_count > 0,
-        "sources": source_rows,
-        "source_ops_report_url": "/reports/source-ops.xlsx?recent_hours=24",
-        "created_source_success": request.query_params.get("created") == "1",
-        "created_source_code": request.query_params.get("created_code") or "",
-        "manual_crawl_error": request.query_params.get("manual_crawl_error") or "",
-        "manual_crawl_error_source_code": request.query_params.get("source_code") or "",
-        "active_crawl_job_count": len(active_crawl_map),
-        "auto_refresh_interval_seconds": 5,
+        "page": page,
     }
     return TEMPLATES.TemplateResponse(name="admin/source_sites_list.html", context=context, request=request)
 
 
-@router.get("/admin/sources/new", response_class=HTMLResponse)
+@router.get("/admin/sources/new", response_class=HTMLResponse, dependencies=[Depends(require_admin_user)])
 def admin_source_create_page(request: Request) -> HTMLResponse:
     context = {
         "request": request,
@@ -155,7 +175,7 @@ def admin_source_create_page(request: Request) -> HTMLResponse:
     return TEMPLATES.TemplateResponse(name="admin/source_new.html", context=context, request=request)
 
 
-@router.post("/admin/sources/new")
+@router.post("/admin/sources/new", dependencies=[Depends(require_admin_user)])
 async def admin_source_create_submit(
     request: Request,
     db: Session = Depends(get_db),
@@ -245,7 +265,7 @@ async def admin_source_create_submit(
     )
 
 
-@router.get("/admin/sources/{code}", response_class=HTMLResponse)
+@router.get("/admin/sources/{code}", response_class=HTMLResponse, dependencies=[Depends(require_admin_user)])
 def admin_source_detail(
     code: str,
     request: Request,
@@ -260,6 +280,7 @@ def admin_source_detail(
     if health_summary is None:
         raise HTTPException(status_code=404, detail="source not found")
     ops_summary = SourceOpsService(session=db).get_source_ops(source_code=source.code, recent_hours=24)
+    active_crawl = _load_active_crawl_map(session=db, source_codes=[source.code]).get(source.code)
 
     context = {
         "request": request,
@@ -319,6 +340,8 @@ def admin_source_detail(
             }
         ),
         "manual_crawl_error": request.query_params.get("manual_crawl_error") or "",
+        "has_active_crawl": active_crawl is not None,
+        "active_crawl": active_crawl or {},
     }
     return TEMPLATES.TemplateResponse(name="admin/source_detail.html", context=context, request=request)
 
@@ -408,6 +431,8 @@ async def admin_trigger_source_manual_crawl(
         source_code=source_model.code,
         crawl_job_id=created_job.id,
         max_pages=default_max_pages,
+        triggered_by="admin_ui",
+        request_id=getattr(request.state, "request_id", None),
         command_runner=trigger_service.command_runner,
         project_root=trigger_service.project_root,
     )
@@ -443,10 +468,20 @@ async def admin_trigger_source_crawl_job(
     action = (form_data.get("action") or ["trigger"])[0].strip() or "trigger"
 
     if action == "retry_latest":
-        result = _trigger_latest_retry_for_source(
-            source=source_model,
-            trigger_service=trigger_service,
-        )
+        try:
+            result = _trigger_latest_retry_for_source(
+                source=source_model,
+                trigger_service=trigger_service,
+            )
+        except SourceActiveCrawlJobConflictError as exc:
+            return RedirectResponse(
+                url=_manual_crawl_error_redirect_url(
+                    source_code=source_model.code,
+                    message=str(exc),
+                    return_to="detail",
+                ),
+                status_code=303,
+            )
         return RedirectResponse(url=f"/admin/crawl-jobs/{result.job.id}", status_code=303)
 
     max_pages_raw = (form_data.get("max_pages") or [""])[0].strip()
@@ -484,19 +519,29 @@ async def admin_trigger_source_crawl_job(
         )
 
     effective_max_pages = payload.max_pages if payload.max_pages is not None else int(source_model.default_max_pages)
-    if payload.job_type == "backfill":
-        assert payload.backfill_year is not None
-        result = trigger_service.trigger_backfill_crawl(
-            source=source_model,
-            backfill_year=payload.backfill_year,
-            max_pages=effective_max_pages,
-            triggered_by=payload.triggered_by,
-        )
-    else:
-        result = trigger_service.trigger_manual_crawl(
-            source=source_model,
-            max_pages=effective_max_pages,
-            triggered_by=payload.triggered_by,
+    try:
+        if payload.job_type == "backfill":
+            assert payload.backfill_year is not None
+            result = trigger_service.queue_backfill_crawl(
+                source=source_model,
+                backfill_year=payload.backfill_year,
+                max_pages=effective_max_pages,
+                triggered_by=payload.triggered_by,
+            )
+        else:
+            result = trigger_service.queue_manual_crawl(
+                source=source_model,
+                max_pages=effective_max_pages,
+                triggered_by=payload.triggered_by,
+            )
+    except SourceActiveCrawlJobConflictError as exc:
+        return RedirectResponse(
+            url=_manual_crawl_error_redirect_url(
+                source_code=source_model.code,
+                message=str(exc),
+                return_to="detail",
+            ),
+            status_code=303,
         )
 
     return RedirectResponse(url=f"/admin/crawl-jobs/{result.job.id}", status_code=303)
@@ -506,7 +551,7 @@ def _trigger_latest_retry_for_source(
     *,
     source: SourceSite,
     trigger_service: SourceCrawlTriggerService,
-) -> SourceCrawlTriggerResult:
+) -> SourceCrawlEnqueueResult:
     session = trigger_service.session
     candidate_jobs = session.scalars(
         select(CrawlJob)
@@ -532,7 +577,7 @@ def _trigger_latest_retry_for_source(
         fields = _parse_message_key_values(latest_retryable.message)
         inherited_max_pages = _as_int(fields.get("max_pages")) or int(source.default_max_pages)
         inherited_backfill_year = _as_int(fields.get("backfill_year"))
-        return trigger_service.trigger_retry_crawl(
+        return trigger_service.queue_retry_crawl(
             source=source,
             retry_of_job_id=int(latest_retryable.id),
             max_pages=inherited_max_pages,
@@ -540,14 +585,14 @@ def _trigger_latest_retry_for_source(
             triggered_by="admin-retry",
         )
 
-    return trigger_service.trigger_manual_crawl(
+    return trigger_service.queue_manual_crawl(
         source=source,
         max_pages=int(source.default_max_pages),
         triggered_by="admin",
     )
 
 
-@router.post("/admin/sources/{code}/config")
+@router.post("/admin/sources/{code}/config", dependencies=[Depends(require_admin_user)])
 async def admin_update_source_config(
     code: str,
     request: Request,
@@ -599,7 +644,7 @@ async def admin_update_source_config(
     return RedirectResponse(url=f"/admin/sources/{updated.code}", status_code=303)
 
 
-@router.post("/admin/sources/{code}/schedule")
+@router.post("/admin/sources/{code}/schedule", dependencies=[Depends(require_admin_user)])
 async def admin_update_source_schedule(
     code: str,
     request: Request,
@@ -682,8 +727,8 @@ def _build_source_sites_list_row(
     source: object,
     health: object | None,
     ops: object | None,
-    active_crawl: dict[str, object] | None = None,
-) -> dict[str, object]:
+    active_crawl: SourceSiteAdminActiveCrawl | dict[str, object] | None = None,
+) -> SourceSiteAdminRow:
     source_id = _as_int(getattr(source, "id", None)) or 0
     raw_code = _as_non_empty_text(getattr(source, "code", None), default="")
     code = raw_code or "-"
@@ -742,138 +787,274 @@ def _build_source_sites_list_row(
         default=code,
     )
 
-    actions = {
-        "manual_crawl_post_url": f"/admin/sources/{raw_code}/manual-crawl" if raw_code else "#",
-        "crawl_jobs_url": f"/admin/crawl-jobs?source_code={raw_code}" if raw_code else "/admin/crawl-jobs",
-        "crawl_errors_url": f"/admin/crawl-errors?source_code={raw_code}" if raw_code else "/admin/crawl-errors",
-        "config_url": f"/admin/sources/{raw_code}" if raw_code else "/admin/sources",
-    }
+    active_crawl_view = _normalize_source_sites_active_crawl(active_crawl, code=raw_code or code)
 
-    return {
-        "id": source_id,
-        "code": code,
-        "name": name,
-        "base_url": base_url,
-        "official_url": official_url,
-        "list_url": list_url,
-        "is_active": is_active,
-        "crawl_interval_minutes": crawl_interval_minutes,
-        "crawl_interval_label": _crawl_interval_label(crawl_interval_minutes),
-        "last_crawled_at": last_crawled_at,
-        "last_new_notice_count": last_new_notice_count,
-        "last_new_count": last_new_notice_count,
-        "has_new_notice": last_new_notice_count > 0,
-        "health_status": health_status,
-        "health_badge": _health_badge_by_status(health_status),
-        "health_status_label": health_status_label,
-        "last_crawl_result": last_crawl_result,
-        "last_failure_summary": last_failure_summary,
-        "latest_job_status_label": last_crawl_result,
-        "latest_failure_reason": last_failure_summary,
-        "latest_list_items_seen": latest_list_items_seen,
-        "latest_list_items_unique": latest_list_items_unique,
-        "latest_list_items_source_duplicates_skipped": latest_list_items_source_duplicates_skipped,
-        "latest_detail_pages_fetched": latest_detail_pages_fetched,
-        "latest_source_duplicates_suppressed": latest_source_duplicates_suppressed,
-        "has_source_duplicates_latest": has_source_duplicates_latest,
-        "recent_7d_error_count": recent_7d_error_count,
-        "default_max_pages": default_max_pages,
-        "schedule_enabled": schedule_enabled,
-        "schedule_days": schedule_days,
-        "schedule_days_label": _schedule_days_label(schedule_days),
-        "description": description,
-        "last_scheduled_run_at": last_scheduled_run_at,
-        "next_scheduled_run_at": next_scheduled_run_at,
-        "last_schedule_status": last_schedule_status,
-        "today_crawl_job_count": today_crawl_job_count,
-        "today_success_count": today_success_count,
-        "today_failed_count": today_failed_count,
-        "today_new_notice_count": today_new_notice_count,
-        "today_ops_summary": today_ops_summary,
-        "last_retry_status": last_retry_status,
-        "last_retry_job_id": last_retry_job_id,
-        "last_retry_label": last_retry_label,
-        "business_code": business_code,
-        "crawl_supported": crawl_supported,
-        "supported_job_types_label": supported_job_types_label,
-        "supports_backfill": "backfill" in supported_job_types,
-        "crawl_support_message": crawl_support_message,
-        "has_active_crawl": active_crawl is not None,
-        "active_crawl": active_crawl or {},
-        "actions": actions,
-    }
+    return SourceSiteAdminRow(
+        id=source_id,
+        code=code,
+        name=name,
+        base_url=base_url,
+        official_url=official_url,
+        list_url=list_url,
+        is_active=is_active,
+        crawl_interval_minutes=crawl_interval_minutes,
+        crawl_interval_label=_crawl_interval_label(crawl_interval_minutes),
+        last_crawled_at=last_crawled_at,
+        last_new_notice_count=last_new_notice_count,
+        last_new_count=last_new_notice_count,
+        has_new_notice=last_new_notice_count > 0,
+        health_status=health_status,
+        health_badge=_health_badge_by_status(health_status),
+        health_status_label=health_status_label,
+        last_crawl_result=last_crawl_result,
+        last_failure_summary=last_failure_summary,
+        latest_job_status_label=last_crawl_result,
+        latest_failure_reason=last_failure_summary,
+        latest_list_items_seen=latest_list_items_seen,
+        latest_list_items_unique=latest_list_items_unique,
+        latest_list_items_source_duplicates_skipped=latest_list_items_source_duplicates_skipped,
+        latest_detail_pages_fetched=latest_detail_pages_fetched,
+        latest_source_duplicates_suppressed=latest_source_duplicates_suppressed,
+        has_source_duplicates_latest=has_source_duplicates_latest,
+        recent_7d_error_count=recent_7d_error_count,
+        default_max_pages=default_max_pages,
+        schedule_enabled=schedule_enabled,
+        schedule_days=schedule_days,
+        schedule_days_label=_schedule_days_label(schedule_days),
+        description=description,
+        last_scheduled_run_at=last_scheduled_run_at,
+        next_scheduled_run_at=next_scheduled_run_at,
+        last_schedule_status=last_schedule_status,
+        today_crawl_job_count=today_crawl_job_count,
+        today_success_count=today_success_count,
+        today_failed_count=today_failed_count,
+        today_new_notice_count=today_new_notice_count,
+        today_ops_summary=today_ops_summary,
+        last_retry_status=last_retry_status,
+        last_retry_job_id=last_retry_job_id,
+        last_retry_label=last_retry_label,
+        business_code=business_code,
+        crawl_supported=crawl_supported,
+        supported_job_types_label=supported_job_types_label,
+        supports_backfill="backfill" in supported_job_types,
+        crawl_support_message=crawl_support_message,
+        has_active_crawl=active_crawl_view.id is not None,
+        active_crawl=active_crawl_view,
+        actions=_default_source_sites_list_actions(raw_code or code),
+    )
 
 
 def _normalize_source_sites_list_row(
     row: object,
     *,
     source: object | None = None,
-) -> dict[str, object]:
-    row_dict = dict(row) if isinstance(row, dict) else {}
+) -> SourceSiteAdminRow:
+    if isinstance(row, SourceSiteAdminRow):
+        return row
+    row_dict = row.model_dump() if hasattr(row, "model_dump") else (dict(row) if isinstance(row, dict) else {})
     fallback_code = _as_non_empty_text(getattr(source, "code", None), default="-")
     code = _as_non_empty_text(row_dict.get("code"), default=fallback_code)
-
-    actions_value = row_dict.get("actions")
-    actions = dict(actions_value) if isinstance(actions_value, dict) else {}
-    default_actions = _default_source_sites_list_actions(code)
+    base_url = _as_non_empty_text(
+        row_dict.get("base_url"),
+        default=_as_non_empty_text(getattr(source, "base_url", None), default="-"),
+    )
+    official_url = _as_non_empty_text(
+        row_dict.get("official_url"),
+        default=_as_non_empty_text(getattr(source, "official_url", None), default=base_url),
+    )
+    list_url = _as_non_empty_text(
+        row_dict.get("list_url"),
+        default=_as_non_empty_text(getattr(source, "list_url", None), default=base_url),
+    )
+    schedule_days = _as_int_default(
+        row_dict.get("schedule_days"),
+        default=_as_int(getattr(source, "schedule_days", None)) or 1,
+    )
+    today_success_count = _as_int_default(row_dict.get("today_success_count"), default=0)
+    today_failed_count = _as_int_default(row_dict.get("today_failed_count"), default=0)
+    today_new_notice_count = _as_int_default(row_dict.get("today_new_notice_count"), default=0)
+    last_retry_job_id = _as_int(row_dict.get("last_retry_job_id"))
+    last_retry_status = _as_non_empty_text(row_dict.get("last_retry_status"), default="-")
+    last_new_notice_count = _as_int_default(row_dict.get("last_new_notice_count"), default=0)
+    active_crawl = _normalize_source_sites_active_crawl(row_dict.get("active_crawl"), code=code)
 
     defaults: dict[str, object] = {
         "id": _as_int(getattr(source, "id", None)) or 0,
         "code": code,
-        "name": _as_non_empty_text(row_dict.get("name"), default=_as_non_empty_text(getattr(source, "name", None), default=code)),
-        "official_url": _as_non_empty_text(
-            row_dict.get("official_url"),
-            default=_as_non_empty_text(getattr(source, "official_url", None), default=_as_non_empty_text(getattr(source, "base_url", None), default="-")),
+        "name": _as_non_empty_text(
+            row_dict.get("name"),
+            default=_as_non_empty_text(getattr(source, "name", None), default=code),
         ),
+        "base_url": base_url,
+        "official_url": official_url,
+        "list_url": list_url,
         "is_active": bool(row_dict.get("is_active", getattr(source, "is_active", False))),
-        "health_status": _as_non_empty_text(row_dict.get("health_status"), default="warning"),
-        "health_badge": _as_non_empty_text(row_dict.get("health_badge"), default="tag-zero"),
-        "last_crawl_result": _as_non_empty_text(row_dict.get("last_crawl_result"), default="-"),
-        "last_failure_summary": _as_non_empty_text(row_dict.get("last_failure_summary"), default="-"),
-        "schedule_enabled": bool(row_dict.get("schedule_enabled", getattr(source, "schedule_enabled", False))),
-        "schedule_days": _as_int_default(row_dict.get("schedule_days"), default=_as_int(getattr(source, "schedule_days", None)) or 1),
-        "schedule_days_label": _as_non_empty_text(
-            row_dict.get("schedule_days_label"),
-            default=_schedule_days_label(
-                _as_int_default(row_dict.get("schedule_days"), default=_as_int(getattr(source, "schedule_days", None)) or 1)
+        "crawl_interval_minutes": _as_int_default(
+            row_dict.get("crawl_interval_minutes"),
+            default=_as_int(getattr(source, "crawl_interval_minutes", None)) or 60,
+        ),
+        "crawl_interval_label": _as_non_empty_text(
+            row_dict.get("crawl_interval_label"),
+            default=_crawl_interval_label(
+                _as_int_default(row_dict.get("crawl_interval_minutes"), default=_as_int(getattr(source, "crawl_interval_minutes", None)) or 60)
             ),
         ),
+        "health_status": _as_non_empty_text(row_dict.get("health_status"), default="warning"),
+        "health_badge": _as_non_empty_text(row_dict.get("health_badge"), default="tag-zero"),
+        "health_status_label": _as_non_empty_text(row_dict.get("health_status_label"), default="警告"),
+        "last_crawl_result": _as_non_empty_text(row_dict.get("last_crawl_result"), default="-"),
+        "last_failure_summary": _as_non_empty_text(row_dict.get("last_failure_summary"), default="-"),
+        "latest_job_status_label": _as_non_empty_text(
+            row_dict.get("latest_job_status_label"),
+            default=_as_non_empty_text(row_dict.get("last_crawl_result"), default="-"),
+        ),
+        "latest_failure_reason": _as_non_empty_text(
+            row_dict.get("latest_failure_reason"),
+            default=_as_non_empty_text(row_dict.get("last_failure_summary"), default="-"),
+        ),
+        "latest_list_items_seen": _as_int_default(row_dict.get("latest_list_items_seen"), default=0),
+        "latest_list_items_unique": _as_int_default(row_dict.get("latest_list_items_unique"), default=0),
+        "latest_list_items_source_duplicates_skipped": _as_int_default(
+            row_dict.get("latest_list_items_source_duplicates_skipped"),
+            default=0,
+        ),
+        "latest_detail_pages_fetched": _as_int_default(row_dict.get("latest_detail_pages_fetched"), default=0),
+        "latest_source_duplicates_suppressed": _as_int_default(
+            row_dict.get("latest_source_duplicates_suppressed"),
+            default=0,
+        ),
+        "has_source_duplicates_latest": bool(row_dict.get("has_source_duplicates_latest", False)),
+        "recent_7d_error_count": _as_int_default(row_dict.get("recent_7d_error_count"), default=0),
+        "default_max_pages": _as_int_default(
+            row_dict.get("default_max_pages"),
+            default=_as_int(getattr(source, "default_max_pages", None)) or 50,
+        ),
+        "schedule_enabled": bool(row_dict.get("schedule_enabled", getattr(source, "schedule_enabled", False))),
+        "schedule_days": schedule_days,
+        "schedule_days_label": _as_non_empty_text(
+            row_dict.get("schedule_days_label"),
+            default=_schedule_days_label(schedule_days),
+        ),
+        "description": _as_non_empty_text(
+            row_dict.get("description"),
+            default=_as_non_empty_text(getattr(source, "description", None), default="-"),
+        ),
+        "last_scheduled_run_at": _as_non_empty_text(row_dict.get("last_scheduled_run_at"), default="-"),
         "next_scheduled_run_at": _as_non_empty_text(row_dict.get("next_scheduled_run_at"), default="-"),
         "last_schedule_status": _as_non_empty_text(row_dict.get("last_schedule_status"), default="-"),
         "last_crawled_at": _as_non_empty_text(row_dict.get("last_crawled_at"), default="-"),
-        "last_new_notice_count": _as_int_default(row_dict.get("last_new_notice_count"), default=0),
-        "today_ops_summary": _as_non_empty_text(row_dict.get("today_ops_summary"), default="成功 0 / 失败 0 / 新增 0"),
-        "last_retry_label": _as_non_empty_text(row_dict.get("last_retry_label"), default="无"),
-        "has_active_crawl": bool(row_dict.get("has_active_crawl", False)),
-        "active_crawl": dict(row_dict.get("active_crawl")) if isinstance(row_dict.get("active_crawl"), dict) else {},
-        "actions": {**default_actions, **actions},
+        "last_new_notice_count": last_new_notice_count,
+        "last_new_count": _as_int_default(row_dict.get("last_new_count"), default=last_new_notice_count),
+        "has_new_notice": bool(row_dict.get("has_new_notice", last_new_notice_count > 0)),
+        "today_crawl_job_count": _as_int_default(row_dict.get("today_crawl_job_count"), default=0),
+        "today_success_count": today_success_count,
+        "today_failed_count": today_failed_count,
+        "today_new_notice_count": today_new_notice_count,
+        "today_ops_summary": _as_non_empty_text(
+            row_dict.get("today_ops_summary"),
+            default=f"成功 {today_success_count} / 失败 {today_failed_count} / 新增 {today_new_notice_count}",
+        ),
+        "last_retry_status": last_retry_status,
+        "last_retry_job_id": last_retry_job_id,
+        "last_retry_label": _as_non_empty_text(
+            row_dict.get("last_retry_label"),
+            default=last_retry_status if last_retry_job_id is not None else "无",
+        ),
+        "business_code": _as_non_empty_text(row_dict.get("business_code"), default=code),
+        "crawl_supported": bool(row_dict.get("crawl_supported", False)),
+        "supported_job_types_label": _as_non_empty_text(row_dict.get("supported_job_types_label"), default="-"),
+        "supports_backfill": bool(row_dict.get("supports_backfill", False)),
+        "crawl_support_message": _as_non_empty_text(row_dict.get("crawl_support_message"), default=""),
+        "has_active_crawl": bool(row_dict.get("has_active_crawl", active_crawl.id is not None)),
+        "active_crawl": active_crawl,
+        "actions": _normalize_source_sites_list_actions(row_dict.get("actions"), code=code),
     }
-    merged = {**defaults, **row_dict}
-    merged["actions"] = {**default_actions, **actions}
-    return merged
+    merged = {
+        **defaults,
+        **{key: value for key, value in row_dict.items() if key not in defaults and value is not None},
+    }
+    merged["active_crawl"] = active_crawl
+    merged["actions"] = _normalize_source_sites_list_actions(row_dict.get("actions"), code=code)
+    return SourceSiteAdminRow.model_validate(merged)
 
 
-def _default_source_sites_list_actions(code: str) -> dict[str, str]:
+def _default_source_sites_list_actions(code: str) -> SourceSiteAdminRowActions:
     normalized_code = code if code and code != "-" else ""
-    return {
-        "manual_crawl_post_url": (
+    return SourceSiteAdminRowActions(
+        manual_crawl_post_url=(
             f"/admin/sources/{normalized_code}/manual-crawl" if normalized_code else "/admin/sources/manual-crawl"
         ),
-        "crawl_jobs_url": (
+        crawl_jobs_url=(
             f"/admin/crawl-jobs?source_code={normalized_code}" if normalized_code else "/admin/crawl-jobs"
         ),
-        "crawl_errors_url": (
+        crawl_errors_url=(
             f"/admin/crawl-errors?source_code={normalized_code}" if normalized_code else "/admin/crawl-errors"
         ),
-        "config_url": f"/admin/sources/{normalized_code}" if normalized_code else "/admin/sources",
-    }
+        config_url=f"/admin/sources/{normalized_code}" if normalized_code else "/admin/sources",
+    )
+
+
+def _normalize_source_sites_list_actions(
+    value: object,
+    *,
+    code: str,
+) -> SourceSiteAdminRowActions:
+    if isinstance(value, SourceSiteAdminRowActions):
+        return value
+    default_actions = _default_source_sites_list_actions(code)
+    actions_dict = value.model_dump() if hasattr(value, "model_dump") else (dict(value) if isinstance(value, dict) else {})
+    return SourceSiteAdminRowActions(
+        manual_crawl_post_url=_as_non_empty_text(
+            actions_dict.get("manual_crawl_post_url"),
+            default=default_actions.manual_crawl_post_url,
+        ),
+        crawl_jobs_url=_as_non_empty_text(
+            actions_dict.get("crawl_jobs_url"),
+            default=default_actions.crawl_jobs_url,
+        ),
+        crawl_errors_url=_as_non_empty_text(
+            actions_dict.get("crawl_errors_url"),
+            default=default_actions.crawl_errors_url,
+        ),
+        config_url=_as_non_empty_text(
+            actions_dict.get("config_url"),
+            default=default_actions.config_url,
+        ),
+    )
+
+
+def _normalize_source_sites_active_crawl(
+    value: object,
+    *,
+    code: str,
+) -> SourceSiteAdminActiveCrawl:
+    if isinstance(value, SourceSiteAdminActiveCrawl):
+        return value
+    default_detail_url = (
+        f"/admin/crawl-jobs?source_code={code}" if code and code != "-" else "/admin/crawl-jobs"
+    )
+    crawl_dict = value.model_dump() if hasattr(value, "model_dump") else (dict(value) if isinstance(value, dict) else {})
+    return SourceSiteAdminActiveCrawl(
+        id=_as_int(crawl_dict.get("id")),
+        job_type=_as_non_empty_text(crawl_dict.get("job_type"), default=""),
+        job_type_label=_as_non_empty_text(crawl_dict.get("job_type_label"), default="抓取任务"),
+        status=_as_non_empty_text(crawl_dict.get("status"), default=""),
+        status_label=_as_non_empty_text(crawl_dict.get("status_label"), default="抓取中"),
+        is_stale=bool(crawl_dict.get("is_stale", False)),
+        stage_label=_as_non_empty_text(crawl_dict.get("stage_label"), default="抓取中"),
+        summary_text=_as_non_empty_text(crawl_dict.get("summary_text"), default="-"),
+        detail_url=_as_non_empty_text(crawl_dict.get("detail_url"), default=default_detail_url),
+    )
 
 
 def _load_active_crawl_map(
     *,
     session: Session,
     source_codes: list[str],
-) -> dict[str, dict[str, object]]:
+) -> dict[str, SourceSiteAdminActiveCrawl]:
+    expired_jobs = reconcile_expired_jobs_in_session(session)
+    if expired_jobs:
+        session.commit()
     normalized_codes = [code for code in source_codes if code]
     if not normalized_codes:
         return {}
@@ -888,22 +1069,23 @@ def _load_active_crawl_map(
         .order_by(SourceSite.code.asc(), CrawlJob.id.desc())
     ).all()
 
-    result: dict[str, dict[str, object]] = {}
+    result: dict[str, SourceSiteAdminActiveCrawl] = {}
     for crawl_job, source_code in rows:
         normalized_source_code = _as_non_empty_text(source_code, default="")
         if not normalized_source_code or normalized_source_code in result:
             continue
         progress = build_crawl_job_progress(crawl_job)
-        result[normalized_source_code] = {
-            "id": int(crawl_job.id),
-            "job_type": crawl_job.job_type,
-            "job_type_label": progress["job_type_label"],
-            "status": crawl_job.status,
-            "status_label": progress["status_label"],
-            "stage_label": progress["stage_label"],
-            "summary_text": progress["summary_text"],
-            "detail_url": f"/admin/crawl-jobs/{int(crawl_job.id)}",
-        }
+        result[normalized_source_code] = SourceSiteAdminActiveCrawl(
+            id=int(crawl_job.id),
+            job_type=crawl_job.job_type,
+            job_type_label=progress["job_type_label"],
+            status=crawl_job.status,
+            status_label=progress["status_label"],
+            is_stale=bool(progress["is_stale"]),
+            stage_label=progress["stage_label"],
+            summary_text=progress["summary_text"],
+            detail_url=f"/admin/crawl-jobs/{int(crawl_job.id)}",
+        )
     return result
 
 
@@ -1037,6 +1219,8 @@ def _manual_crawl_success_redirect_url(*, source_code: str, created_job_id: int)
 
 
 def _manual_crawl_create_error_message(exc: Exception) -> str:
+    if isinstance(exc, SourceActiveCrawlJobConflictError):
+        return str(exc)
     detail = str(exc).strip()
     if detail:
         return f"手动抓取任务创建失败：{detail}"
@@ -1062,15 +1246,47 @@ def _run_manual_crawl_job_background(
     source_code: str,
     crawl_job_id: int,
     max_pages: int,
+    triggered_by: str,
+    request_id: str | None,
     command_runner: CrawlCommandRunner,
     project_root: Path,
 ) -> None:
     engine = create_engine(database_url, pool_pre_ping=True)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    crawl_job_service = CrawlJobService(session_factory=session_factory)
+    log_context = {
+        "source_code": source_code,
+        "crawl_job_id": crawl_job_id,
+        "job_type": "manual",
+        "triggered_by": triggered_by,
+        "request_id": request_id,
+        "max_pages": max_pages,
+    }
+    LOGGER.info(
+        "manual crawl background started",
+        extra=build_log_extra(event="manual_crawl_background_started", **log_context),
+    )
     try:
         with session_factory() as session:
             source = SourceSiteRepository(session).get_model_by_code(source_code)
             if source is None:
+                LOGGER.error(
+                    "manual crawl background source missing",
+                    extra=build_log_extra(event="manual_crawl_background_source_missing", **log_context),
+                )
+                crawl_job_service.fail_job_if_active_in_session(
+                    session,
+                    job_id=crawl_job_id,
+                    message=_manual_crawl_background_failure_message(
+                        source_code=source_code,
+                        crawl_job_id=crawl_job_id,
+                        max_pages=max_pages,
+                        triggered_by=triggered_by,
+                        event="manual_crawl_background_source_missing",
+                        failure_reason="后台任务启动失败：来源不存在或已被删除",
+                    ),
+                )
+                session.commit()
                 return
             trigger_service = SourceCrawlTriggerService(
                 session=session,
@@ -1082,11 +1298,49 @@ def _run_manual_crawl_job_background(
                 crawl_job_id=crawl_job_id,
                 max_pages=max_pages,
             )
+            LOGGER.info(
+                "manual crawl background finished",
+                extra=build_log_extra(event="manual_crawl_background_finished", **log_context),
+            )
     except Exception as exc:
-        print(
-            f"[manual-crawl-background] source={source_code} crawl_job_id={crawl_job_id} failed: {exc}",
-            flush=True,
+        LOGGER.exception(
+            "manual crawl background failed",
+            extra=build_log_extra(event="manual_crawl_background_failed", **log_context),
+        )
+        crawl_job_service.fail_job_if_active(
+            crawl_job_id,
+            message=_manual_crawl_background_failure_message(
+                source_code=source_code,
+                crawl_job_id=crawl_job_id,
+                max_pages=max_pages,
+                triggered_by=triggered_by,
+                event="manual_crawl_background_failed",
+                failure_reason=f"后台任务执行失败：{exc}",
+            ),
         )
         return
     finally:
         engine.dispose()
+
+
+def _manual_crawl_background_failure_message(
+    *,
+    source_code: str,
+    crawl_job_id: int,
+    max_pages: int,
+    triggered_by: str,
+    event: str,
+    failure_reason: str,
+) -> str:
+    return "; ".join(
+        [
+            f"source_code={source_code}",
+            "job_type=manual",
+            f"crawl_job_id={crawl_job_id}",
+            f"max_pages={max_pages}",
+            f"triggered_by={triggered_by}",
+            f"event={event}",
+            "background_stage=dispatch",
+            f"failure_reason={failure_reason}",
+        ]
+    )

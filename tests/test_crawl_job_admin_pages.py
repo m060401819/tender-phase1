@@ -11,10 +11,11 @@ from sqlalchemy.orm import sessionmaker
 import app.models  # noqa: F401
 from app.db.base import Base
 from app.db.session import get_db
-from app.api.endpoints.sources import get_crawl_command_runner
+from app.api.endpoints.sources import get_crawl_command_runner, get_crawl_job_dispatcher
 from app.main import app
-from app.models import CrawlError
-from app.services import CrawlJobService
+from app.models import CrawlError, CrawlJob
+from app.repositories import SourceSiteRepository
+from app.services import CrawlJobService, SourceCrawlTriggerService
 
 
 @dataclass(slots=True)
@@ -30,9 +31,41 @@ class StubRunner:
         self.return_code = return_code
         self.commands: list[list[str]] = []
 
-    def run(self, command: list[str], *, cwd: Path) -> int:
+    def run(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        heartbeat_callback=None,
+        heartbeat_interval_seconds: int = 30,
+    ) -> int:
+        _ = (cwd, heartbeat_callback, heartbeat_interval_seconds)
         self.commands.append(command)
         return self.return_code
+
+
+class InlineDispatcher:
+    def __init__(self, *, session_factory: sessionmaker, runner: StubRunner) -> None:
+        self.session_factory = session_factory
+        self.runner = runner
+
+    def dispatch(self, request, *, project_root: Path, database_url: str) -> None:  # type: ignore[no-untyped-def]
+        _ = database_url
+        with self.session_factory() as session:
+            source = SourceSiteRepository(session).get_model_by_code(request.source_code)
+            assert source is not None
+            service = SourceCrawlTriggerService(
+                session=session,
+                command_runner=self.runner,
+                project_root=project_root,
+            )
+            service.execute_crawl_job(
+                source=source,
+                crawl_job_id=request.crawl_job_id,
+                job_type=request.job_type,
+                max_pages=request.max_pages,
+                backfill_year=request.backfill_year,
+            )
 
 
 
@@ -121,7 +154,7 @@ def _seed_jobs(session_factory: sessionmaker) -> SeededAdminJobs:
 
 
 
-def _build_client(tmp_path: Path) -> tuple[TestClient, SeededAdminJobs, StubRunner, object]:
+def _build_client(tmp_path: Path) -> tuple[TestClient, SeededAdminJobs, sessionmaker, StubRunner, object]:
     db_url = f"sqlite+pysqlite:///{tmp_path / 'crawl_job_admin.db'}"
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
@@ -139,13 +172,16 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, SeededAdminJobs, StubRunn
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_crawl_command_runner] = lambda: runner
+    app.dependency_overrides[get_crawl_job_dispatcher] = (
+        lambda: InlineDispatcher(session_factory=session_factory, runner=runner)
+    )
     client = TestClient(app)
-    return client, seeded, runner, engine
+    return client, seeded, session_factory, runner, engine
 
 
 
 def test_admin_crawl_jobs_list_page_supports_filter_and_pagination(tmp_path: Path) -> None:
-    client, seeded, _, engine = _build_client(tmp_path)
+    client, seeded, _, _, engine = _build_client(tmp_path)
     try:
         response = client.get("/admin/crawl-jobs")
         assert response.status_code == 200
@@ -202,7 +238,7 @@ def test_admin_crawl_jobs_list_page_supports_filter_and_pagination(tmp_path: Pat
 
 
 def test_admin_crawl_job_detail_page_shows_json_region(tmp_path: Path) -> None:
-    client, seeded, _, engine = _build_client(tmp_path)
+    client, seeded, _, _, engine = _build_client(tmp_path)
     try:
         response = client.get(f"/admin/crawl-jobs/{seeded.partial_job_id}")
         assert response.status_code == 200
@@ -211,6 +247,11 @@ def test_admin_crawl_job_detail_page_shows_json_region(tmp_path: Path) -> None:
         assert "recent_crawl_error_count" in response.text
         assert "pages_scraped" in response.text
         assert "dedup_skipped" in response.text
+        assert "queued_at" in response.text
+        assert "picked_at" in response.text
+        assert "heartbeat_at" in response.text
+        assert "timeout_at" in response.text
+        assert "lease_expires_at" in response.text
         assert "first_publish_date_seen" in response.text
         assert "last_publish_date_seen" in response.text
         assert '"source_code": "example_source"' in response.text
@@ -224,7 +265,7 @@ def test_admin_crawl_job_detail_page_shows_json_region(tmp_path: Path) -> None:
 
 
 def test_admin_crawl_job_detail_page_auto_refreshes_for_active_job(tmp_path: Path) -> None:
-    client, seeded, _, engine = _build_client(tmp_path)
+    client, seeded, _, _, engine = _build_client(tmp_path)
     try:
         response = client.get(f"/admin/crawl-jobs/{seeded.pending_job_id}")
         assert response.status_code == 200
@@ -236,8 +277,27 @@ def test_admin_crawl_job_detail_page_auto_refreshes_for_active_job(tmp_path: Pat
         engine.dispose()
 
 
+def test_admin_crawl_job_detail_page_stops_auto_refresh_after_expired_pending_job_reconciled(tmp_path: Path) -> None:
+    client, seeded, session_factory, _, engine = _build_client(tmp_path)
+    try:
+        with session_factory() as session:
+            pending_job = session.get(CrawlJob, seeded.pending_job_id)
+            assert pending_job is not None
+            pending_job.timeout_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            pending_job.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            session.commit()
+
+        follow_up = client.get(f"/admin/crawl-jobs/{seeded.pending_job_id}")
+        assert follow_up.status_code == 200
+        assert 'data-live-refresh="true"' not in follow_up.text
+        assert "timeout_stage=pending" in follow_up.text
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
 def test_admin_crawl_jobs_can_retry_failed_job_and_show_result_link(tmp_path: Path) -> None:
-    client, seeded, runner, engine = _build_client(tmp_path)
+    client, seeded, _, runner, engine = _build_client(tmp_path)
     try:
         retry_response = client.post(
             f"/admin/crawl-jobs/{seeded.failed_job_id}/retry",

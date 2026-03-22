@@ -9,6 +9,7 @@ from app.repositories import (
     CrawlJobRecord,
     CrawlJobRepository,
 )
+from .crawl_job_service import reconcile_expired_jobs_in_session
 
 
 class CrawlJobQueryService:
@@ -29,6 +30,9 @@ class CrawlJobQueryService:
         limit: int,
         offset: int,
     ) -> CrawlJobListResult:
+        expired_jobs = reconcile_expired_jobs_in_session(self.repository.session)
+        if expired_jobs:
+            self.repository.session.commit()
         return self.repository.list_jobs(
             filters=CrawlJobQueryFilters(
                 source_code=source_code,
@@ -43,4 +47,7 @@ class CrawlJobQueryService:
         )
 
     def get_crawl_job_detail(self, job_id: int) -> CrawlJobRecord | None:
+        expired_jobs = reconcile_expired_jobs_in_session(self.repository.session)
+        if expired_jobs:
+            self.repository.session.commit()
         return self.repository.get_job_detail(job_id)

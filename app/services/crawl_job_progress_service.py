@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -34,12 +35,21 @@ def build_crawl_job_progress(job: object) -> dict[str, object]:
     dedup_skipped = _as_int(_read(job, "list_items_source_duplicates_skipped")) + _as_int(
         _read(job, "source_duplicates_suppressed")
     )
+    heartbeat_at = _as_datetime(_read(job, "heartbeat_at"))
+    timeout_at = _as_datetime(_read(job, "timeout_at")) or _as_datetime(_read(job, "lease_expires_at"))
+    is_stale = _is_stale(status=status, timeout_at=timeout_at)
 
-    is_active = status in ACTIVE_CRAWL_JOB_STATUSES
+    is_active = status in ACTIVE_CRAWL_JOB_STATUSES and not is_stale
     job_type_label = JOB_TYPE_LABELS.get(job_type, job_type or "-")
     status_label = STATUS_LABELS.get(status, status or "-")
 
-    if status == "pending":
+    if is_stale and status == "pending":
+        stage_label = "启动超时"
+        summary_text = "任务已创建但未在租约内启动，可能已丢失后台执行"
+    elif is_stale and status == "running":
+        stage_label = "心跳超时"
+        summary_text = "任务心跳已过期，执行进程可能已退出或卡死"
+    elif status == "pending":
         stage_label = "等待启动"
         summary_text = "已入队，等待启动"
     elif status == "running":
@@ -82,10 +92,14 @@ def build_crawl_job_progress(job: object) -> dict[str, object]:
 
     return {
         "is_active": is_active,
+        "is_stale": is_stale,
         "job_type_label": job_type_label,
         "status_label": status_label,
         "stage_label": stage_label,
         "summary_text": summary_text,
+        "heartbeat_at": heartbeat_at.isoformat() if heartbeat_at is not None else None,
+        "timeout_at": timeout_at.isoformat() if timeout_at is not None else None,
+        "lease_expires_at": timeout_at.isoformat() if timeout_at is not None else None,
     }
 
 
@@ -113,6 +127,14 @@ def _as_int(value: object) -> int:
         return 0
 
 
+def _as_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    return None
+
+
 def _metric(label: str, value: int, *, positive_only: bool = False) -> str | None:
     if positive_only and value <= 0:
         return None
@@ -124,3 +146,11 @@ def _join_parts(parts: list[str | None], *, fallback: str) -> str:
     if not normalized:
         return fallback
     return " / ".join(normalized)
+
+
+def _is_stale(*, status: str, timeout_at: datetime | None) -> bool:
+    if status not in ACTIVE_CRAWL_JOB_STATUSES:
+        return False
+    if timeout_at is None:
+        return False
+    return timeout_at <= datetime.now(timezone.utc)

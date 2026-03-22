@@ -3,18 +3,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Barrier, Thread
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
+import pytest
 
 import app.models  # noqa: F401
 from app.db.base import Base
 from app.db.session import get_db
-from app.api.endpoints.sources import get_crawl_command_runner
+from app.api.endpoints.sources import get_crawl_command_runner, get_crawl_job_dispatcher
 from app.main import app
-from app.models import CrawlError
-from app.services import CrawlJobService
+from app.models import CrawlError, CrawlJob
+from app.repositories import SourceSiteRepository
+from app.services import CrawlJobService, SourceCrawlTriggerService
 
 
 @dataclass(slots=True)
@@ -30,9 +33,46 @@ class StubRunner:
         self.return_code = return_code
         self.commands: list[list[str]] = []
 
-    def run(self, command: list[str], *, cwd: Path) -> int:
+    def run(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        heartbeat_callback=None,
+        heartbeat_interval_seconds: int = 30,
+    ) -> int:
+        _ = (cwd, heartbeat_callback, heartbeat_interval_seconds)
         self.commands.append(command)
         return self.return_code
+
+
+class InlineDispatcher:
+    def __init__(self, *, session_factory: sessionmaker, runner: StubRunner) -> None:
+        self.session_factory = session_factory
+        self.runner = runner
+
+    def dispatch(self, request, *, project_root: Path, database_url: str) -> None:  # type: ignore[no-untyped-def]
+        _ = database_url
+        with self.session_factory() as session:
+            source = SourceSiteRepository(session).get_model_by_code(request.source_code)
+            assert source is not None
+            service = SourceCrawlTriggerService(
+                session=session,
+                command_runner=self.runner,
+                project_root=project_root,
+            )
+            service.execute_crawl_job(
+                source=source,
+                crawl_job_id=request.crawl_job_id,
+                job_type=request.job_type,
+                max_pages=request.max_pages,
+                backfill_year=request.backfill_year,
+            )
+
+
+class NoOpDispatcher:
+    def dispatch(self, request, *, project_root: Path, database_url: str) -> None:  # type: ignore[no-untyped-def]
+        _ = (request, project_root, database_url)
 
 
 
@@ -130,7 +170,7 @@ def _seed_jobs(session_factory: sessionmaker) -> SeededJobs:
     service.finish_job(partial.id)
 
     pending = service.create_job(
-        source_code="example_source",
+        source_code="pending_source",
         job_type="manual",
         triggered_by="test",
     )
@@ -162,6 +202,9 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, SeededJobs, sessionmaker,
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_crawl_command_runner] = lambda: runner
+    app.dependency_overrides[get_crawl_job_dispatcher] = (
+        lambda: InlineDispatcher(session_factory=session_factory, runner=runner)
+    )
     client = TestClient(app)
 
     return client, seeded, session_factory, runner, engine
@@ -205,7 +248,7 @@ def test_crawl_job_list_filters_sort_and_pagination(tmp_path: Path) -> None:
 
 
 
-def test_crawl_job_list_default_order_by_started_at_desc(tmp_path: Path) -> None:
+def test_crawl_job_list_default_order_by_started_at_desc_prioritizes_recently_queued_jobs(tmp_path: Path) -> None:
     client, seeded, _, _, engine = _build_client(tmp_path)
     try:
         response = client.get("/crawl-jobs", params={"limit": 4, "offset": 0})
@@ -214,10 +257,10 @@ def test_crawl_job_list_default_order_by_started_at_desc(tmp_path: Path) -> None
 
         ids = [item["id"] for item in payload["items"]]
         assert ids == [
+            seeded.pending_job_id,
             seeded.partial_job_id,
             seeded.running_job_id,
             seeded.succeeded_job_id,
-            seeded.pending_job_id,
         ]
         assert payload["order_by"] == "started_at"
     finally:
@@ -237,6 +280,9 @@ def test_crawl_job_detail_returns_core_fields_and_recent_error_count(tmp_path: P
         assert payload["source_code"] == "example_source"
         assert payload["job_type"] == "backfill"
         assert payload["status"] == "partial"
+        assert payload["queued_at"] is not None
+        assert payload["picked_at"] is not None
+        assert payload["timeout_at"] is None
         assert payload["pages_fetched"] == 1
         assert payload["documents_saved"] == 1
         assert payload["notices_upserted"] == 1
@@ -258,11 +304,58 @@ def test_crawl_job_detail_returns_core_fields_and_recent_error_count(tmp_path: P
         engine.dispose()
 
 
+def test_crawl_job_detail_reconciles_expired_pending_job(tmp_path: Path) -> None:
+    client, seeded, session_factory, _, engine = _build_client(tmp_path)
+    try:
+        with session_factory() as session:
+            job = session.get(CrawlJob, seeded.pending_job_id)
+            assert job is not None
+            job.timeout_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            job.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            session.commit()
+
+        response = client.get(f"/crawl-jobs/{seeded.pending_job_id}")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "failed"
+        assert payload["timeout_at"] is None
+        assert payload["lease_expires_at"] is None
+        assert "timeout_stage=pending" in (payload["message"] or "")
+        assert "failure_reason=任务启动超时" in (payload["message"] or "")
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_crawl_job_detail_reconciles_expired_running_job(tmp_path: Path) -> None:
+    client, seeded, session_factory, _, engine = _build_client(tmp_path)
+    try:
+        with session_factory() as session:
+            job = session.get(CrawlJob, seeded.running_job_id)
+            assert job is not None
+            job.heartbeat_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            job.timeout_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            job.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            session.commit()
+
+        response = client.get(f"/crawl-jobs/{seeded.running_job_id}")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "failed"
+        assert payload["timeout_at"] is None
+        assert payload["lease_expires_at"] is None
+        assert "timeout_stage=running" in (payload["message"] or "")
+        assert "failure_reason=任务心跳超时" in (payload["message"] or "")
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
 def _seed_failed_job_for_retry(session_factory: sessionmaker) -> int:
     now = datetime.now(timezone.utc)
     service = CrawlJobService(session_factory=session_factory)
     failed = service.create_job(
-        source_code="anhui_ggzy_zfcg",
+        source_code="ggzy_gov_cn_deal",
         job_type="manual",
         triggered_by="test",
     )
@@ -293,12 +386,13 @@ def test_crawl_job_retry_failed_job_creates_one_manual_retry(tmp_path: Path) -> 
         assert payload["original_job_id"] == failed_job_id
         assert payload["retry_job"]["job_type"] == "manual_retry"
         assert payload["retry_job"]["retry_of_job_id"] == failed_job_id
-        assert payload["retry_job"]["status"] == "succeeded"
-        assert payload["return_code"] == 0
+        assert payload["retry_job"]["status"] == "pending"
+        assert payload["retry_job"]["queued_at"] is not None
+        assert payload["retry_job"]["picked_at"] is None
         assert len(runner.commands) == 1
 
         duplicate = client.post(f"/crawl-jobs/{failed_job_id}/retry", json={"triggered_by": "api-retry"})
-        assert duplicate.status_code == 400
+        assert duplicate.status_code == 409
         assert duplicate.json()["detail"] == "job already retried"
     finally:
         app.dependency_overrides.clear()
@@ -314,7 +408,7 @@ def test_crawl_job_retry_partial_job_is_allowed(tmp_path: Path) -> None:
         assert payload["original_job_id"] == seeded.partial_job_id
         assert payload["retry_job"]["job_type"] == "manual_retry"
         assert payload["retry_job"]["retry_of_job_id"] == seeded.partial_job_id
-        assert payload["retry_job"]["status"] == "succeeded"
+        assert payload["retry_job"]["status"] == "pending"
         assert len(runner.commands) == 1
     finally:
         app.dependency_overrides.clear()
@@ -339,5 +433,75 @@ def test_crawl_job_retry_not_found_returns_404(tmp_path: Path) -> None:
         assert response.status_code == 404
         assert response.json()["detail"] == "crawl_job not found"
     finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_crawl_job_retry_concurrent_requests_return_conflict_instead_of_500(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, session_factory, runner, engine = _build_client(tmp_path)
+    secondary_client = TestClient(app)
+    barrier = Barrier(2)
+    original_create_job_in_session = CrawlJobService.create_job_in_session
+    try:
+        failed_job_id = _seed_failed_job_for_retry(session_factory)
+        app.dependency_overrides[get_crawl_job_dispatcher] = lambda: NoOpDispatcher()
+
+        def _concurrent_create_job_in_session(self, session, **kwargs):  # type: ignore[no-untyped-def]
+            retry_of_job_id = kwargs.get("retry_of_job_id")
+            if retry_of_job_id is not None:
+                barrier.wait(timeout=5)
+            return original_create_job_in_session(self, session, **kwargs)
+
+        monkeypatch.setattr(CrawlJobService, "create_job_in_session", _concurrent_create_job_in_session)
+
+        first_response: dict[str, object] = {}
+
+        def _send_first_request() -> None:
+            try:
+                first_response["value"] = client.post(
+                    f"/crawl-jobs/{failed_job_id}/retry",
+                    json={"triggered_by": "api-retry-thread-a"},
+                )
+            except Exception as exc:  # pragma: no cover - diagnostic guard for thread failure
+                first_response["error"] = exc
+
+        worker = Thread(target=_send_first_request)
+        worker.start()
+
+        second = secondary_client.post(
+            f"/crawl-jobs/{failed_job_id}/retry",
+            json={"triggered_by": "api-retry-thread-b"},
+        )
+
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert "error" not in first_response
+
+        first = first_response.get("value")
+        assert first is not None
+
+        responses = [first, second]
+        status_codes = sorted(response.status_code for response in responses)
+        assert status_codes == [201, 409]
+
+        conflict = next(response for response in responses if response.status_code == 409)
+        assert conflict.json()["detail"] == "job already retried"
+
+        with session_factory() as session:
+            retry_jobs = session.scalars(
+                select(CrawlJob)
+                .where(CrawlJob.retry_of_job_id == failed_job_id)
+                .order_by(CrawlJob.id.asc())
+            ).all()
+            assert len(retry_jobs) == 1
+            assert retry_jobs[0].job_type == "manual_retry"
+            assert retry_jobs[0].status == "pending"
+
+        assert len(runner.commands) == 0
+    finally:
+        secondary_client.close()
         app.dependency_overrides.clear()
         engine.dispose()

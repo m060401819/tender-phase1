@@ -10,10 +10,16 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import SourceSite
-from app.services.source_crawl_trigger_service import CrawlCommandRunner, SourceCrawlTriggerService
+from app.services.source_crawl_trigger_service import (
+    CrawlCommandRunner,
+    SourceActiveCrawlJobConflictError,
+    SourceCrawlTriggerService,
+)
 
 SCHEDULE_DAY_OPTIONS = {1, 2, 3, 7}
-SCHEDULE_STATUS_OPTIONS = {"succeeded", "failed", "partial"}
+SCHEDULE_STATUS_OPTIONS = {"succeeded", "failed", "partial", "skipped"}
+SOURCE_SCHEDULE_JOB_PREFIX = "source_schedule::"
+SOURCE_SCHEDULE_REFRESH_JOB_ID = "source_schedule_runtime::refresh"
 
 
 @dataclass(slots=True)
@@ -27,17 +33,19 @@ class SourceScheduleSnapshot:
 
 
 class SourceScheduleRuntime:
-    """Single-process scheduler runtime for source auto-crawl."""
+    """Scheduler runtime for source auto-crawl backed by in-memory APScheduler jobs."""
 
     def __init__(
         self,
         *,
         database_url: str,
         command_runner: CrawlCommandRunner | None = None,
+        refresh_interval_seconds: int = 30,
     ) -> None:
         self._engine = create_engine(database_url, pool_pre_ping=True)
         self.session_factory = sessionmaker(bind=self._engine, autoflush=False, autocommit=False, expire_on_commit=False)
         self.command_runner = command_runner
+        self.refresh_interval_seconds = max(int(refresh_interval_seconds), 1)
         self.scheduler = BackgroundScheduler(timezone=timezone.utc)
         self._started = False
 
@@ -47,6 +55,7 @@ class SourceScheduleRuntime:
         self.scheduler.start()
         try:
             self.restore_from_db()
+            self._register_refresh_job()
         except Exception:
             self.scheduler.shutdown(wait=False)
             self._started = False
@@ -62,14 +71,18 @@ class SourceScheduleRuntime:
     def restore_from_db(self) -> None:
         with self.session_factory() as session:
             sources = session.scalars(select(SourceSite)).all()
+            active_source_codes: set[str] = set()
             for source in sources:
+                active_source_codes.add(source.code)
                 self._sync_source_in_session(session, source)
+            self._remove_stale_source_jobs(active_source_codes)
             session.commit()
 
     def sync_source(self, source_code: str) -> None:
         with self.session_factory() as session:
             source = session.scalar(select(SourceSite).where(SourceSite.code == source_code))
             if source is None:
+                self._remove_job_if_exists(self._job_id(source_code))
                 return
             self._sync_source_in_session(session, source)
             session.commit()
@@ -83,7 +96,13 @@ class SourceScheduleRuntime:
             return
 
         days = int(source.schedule_days)
-        next_run = datetime.now(timezone.utc) + timedelta(days=days)
+        existing_job = self.scheduler.get_job(job_id)
+        if existing_job is not None and self._job_matches_source(existing_job, source):
+            source.next_scheduled_run_at = existing_job.next_run_time
+            session.add(source)
+            return
+
+        next_run = self._resolve_next_run_time(source, days=days)
         self.scheduler.add_job(
             self._run_scheduled_source,
             trigger=IntervalTrigger(days=days, timezone=timezone.utc),
@@ -126,6 +145,12 @@ class SourceScheduleRuntime:
                     triggered_by="scheduler",
                 )
                 status = result.job.status
+            except SourceActiveCrawlJobConflictError:
+                session.rollback()
+                status = "skipped"
+                source = session.scalar(select(SourceSite).where(SourceSite.code == source_code))
+                if source is None:
+                    return
             except Exception:
                 session.rollback()
                 source = session.scalar(select(SourceSite).where(SourceSite.code == source_code))
@@ -147,6 +172,49 @@ class SourceScheduleRuntime:
         except JobLookupError:
             return
 
+    def _register_refresh_job(self) -> None:
+        next_run = datetime.now(timezone.utc) + timedelta(seconds=self.refresh_interval_seconds)
+        self.scheduler.add_job(
+            self.restore_from_db,
+            trigger=IntervalTrigger(seconds=self.refresh_interval_seconds, timezone=timezone.utc),
+            id=SOURCE_SCHEDULE_REFRESH_JOB_ID,
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            next_run_time=next_run,
+            misfire_grace_time=max(self.refresh_interval_seconds, 1),
+        )
+
+    def _remove_stale_source_jobs(self, active_source_codes: set[str]) -> None:
+        active_job_ids = {self._job_id(source_code) for source_code in active_source_codes}
+        for job in self.scheduler.get_jobs():
+            if job.id == SOURCE_SCHEDULE_REFRESH_JOB_ID:
+                continue
+            if not job.id.startswith(SOURCE_SCHEDULE_JOB_PREFIX):
+                continue
+            if job.id in active_job_ids:
+                continue
+            self._remove_job_if_exists(job.id)
+
+    @staticmethod
+    def _job_matches_source(job, source: SourceSite) -> bool:
+        trigger = getattr(job, "trigger", None)
+        if not isinstance(trigger, IntervalTrigger):
+            return False
+        return trigger.interval == timedelta(days=int(source.schedule_days))
+
+    @staticmethod
+    def _resolve_next_run_time(source: SourceSite, *, days: int) -> datetime:
+        next_run = source.next_scheduled_run_at
+        now = datetime.now(timezone.utc)
+        if next_run is None:
+            return now + timedelta(days=days)
+        if next_run.tzinfo is None:
+            next_run = next_run.replace(tzinfo=timezone.utc)
+        if next_run <= now:
+            return now
+        return next_run
+
     @staticmethod
     def _should_schedule(source: SourceSite) -> bool:
         return bool(
@@ -157,7 +225,7 @@ class SourceScheduleRuntime:
 
     @staticmethod
     def _job_id(source_code: str) -> str:
-        return f"source_schedule::{source_code}"
+        return f"{SOURCE_SCHEDULE_JOB_PREFIX}{source_code}"
 
 
 def calculate_next_scheduled_run(
@@ -174,10 +242,17 @@ def calculate_next_scheduled_run(
 _global_source_schedule_runtime: SourceScheduleRuntime | None = None
 
 
-def initialize_source_schedule_runtime(database_url: str) -> SourceScheduleRuntime:
+def initialize_source_schedule_runtime(
+    database_url: str,
+    *,
+    refresh_interval_seconds: int = 30,
+) -> SourceScheduleRuntime:
     global _global_source_schedule_runtime
     if _global_source_schedule_runtime is None:
-        _global_source_schedule_runtime = SourceScheduleRuntime(database_url=database_url)
+        _global_source_schedule_runtime = SourceScheduleRuntime(
+            database_url=database_url,
+            refresh_interval_seconds=refresh_interval_seconds,
+        )
     return _global_source_schedule_runtime
 
 
@@ -198,25 +273,23 @@ def sync_source_schedule(
     *,
     fallback_session: Session | None = None,
 ) -> None:
+    if fallback_session is not None:
+        source = fallback_session.scalar(select(SourceSite).where(SourceSite.code == source_code))
+        if source is not None:
+            source.next_scheduled_run_at = calculate_next_scheduled_run(
+                schedule_enabled=bool(source.schedule_enabled),
+                schedule_days=int(source.schedule_days),
+                is_active=bool(source.is_active),
+            )
+            fallback_session.add(source)
+            fallback_session.commit()
+            fallback_session.refresh(source)
+
     runtime = get_source_schedule_runtime()
-    if runtime is not None:
-        try:
-            runtime.sync_source(source_code)
-            return
-        except Exception:
-            pass
-
-    if fallback_session is None:
+    if runtime is None:
         return
 
-    source = fallback_session.scalar(select(SourceSite).where(SourceSite.code == source_code))
-    if source is None:
+    try:
+        runtime.sync_source(source_code)
+    except Exception:
         return
-    source.next_scheduled_run_at = calculate_next_scheduled_run(
-        schedule_enabled=bool(source.schedule_enabled),
-        schedule_days=int(source.schedule_days),
-        is_active=bool(source.is_active),
-    )
-    fallback_session.add(source)
-    fallback_session.commit()
-    fallback_session.refresh(source)

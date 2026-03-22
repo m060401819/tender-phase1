@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.endpoints.admin_crawl_jobs import router as admin_crawl_jobs_router
 from app.api.endpoints.admin_settings import router as admin_settings_router
@@ -16,21 +16,22 @@ from app.api.endpoints.settings import router as settings_router
 from app.api.endpoints.raw_documents import router as raw_documents_router
 from app.api.endpoints.stats import router as stats_router
 from app.api.endpoints.sources import router as sources_router
+from app.core.auth import require_admin_user, require_ops_user, require_viewer_user
 
 api_router = APIRouter()
 api_router.include_router(health_router)
 api_router.include_router(crawl_jobs_router)
 api_router.include_router(crawl_errors_router)
 api_router.include_router(notices_router)
-api_router.include_router(reports_router)
+api_router.include_router(reports_router, dependencies=[Depends(require_ops_user)])
 api_router.include_router(raw_documents_router)
 api_router.include_router(stats_router)
-api_router.include_router(settings_router)
+api_router.include_router(settings_router, dependencies=[Depends(require_admin_user)])
 api_router.include_router(sources_router)
-api_router.include_router(admin_dashboard_router)
-api_router.include_router(admin_crawl_jobs_router)
-api_router.include_router(admin_crawl_errors_router)
-api_router.include_router(admin_notices_router)
-api_router.include_router(admin_raw_documents_router)
-api_router.include_router(admin_sources_router)
-api_router.include_router(admin_settings_router)
+api_router.include_router(admin_dashboard_router, dependencies=[Depends(require_viewer_user)])
+api_router.include_router(admin_crawl_jobs_router, dependencies=[Depends(require_viewer_user)])
+api_router.include_router(admin_crawl_errors_router, dependencies=[Depends(require_viewer_user)])
+api_router.include_router(admin_notices_router, dependencies=[Depends(require_viewer_user)])
+api_router.include_router(admin_raw_documents_router, dependencies=[Depends(require_viewer_user)])
+api_router.include_router(admin_sources_router, dependencies=[Depends(require_ops_user)])
+api_router.include_router(admin_settings_router, dependencies=[Depends(require_admin_user)])

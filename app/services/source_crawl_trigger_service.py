@@ -1,28 +1,170 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Protocol
+from typing import Callable, Protocol
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import CrawlError, CrawlJob, RawDocument, SourceSite
 from app.services.source_adapter_registry import get_source_adapter, resolve_spider_name, supports_job_type
-from app.services.crawl_job_service import CrawlJobService, CrawlJobSnapshot
+from app.services.crawl_job_service import (
+    ACTIVE_CRAWL_JOB_STATUSES,
+    CrawlJobService,
+    CrawlJobSnapshot,
+    DEFAULT_RUNNING_LEASE_SECONDS,
+    reconcile_expired_jobs_in_session,
+)
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CrawlCommandRunner(Protocol):
-    def run(self, command: list[str], *, cwd: Path) -> int:
+    def run(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        heartbeat_callback: Callable[[], None] | None = None,
+        heartbeat_interval_seconds: int = 30,
+    ) -> int:
         """Run crawl command and return process exit code."""
 
 
 class SubprocessCrawlCommandRunner:
-    def run(self, command: list[str], *, cwd: Path) -> int:
-        completed = subprocess.run(command, cwd=cwd, check=False)
-        return int(completed.returncode)
+    def run(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        heartbeat_callback: Callable[[], None] | None = None,
+        heartbeat_interval_seconds: int = 30,
+    ) -> int:
+        process = subprocess.Popen(command, cwd=cwd)
+        interval = max(int(heartbeat_interval_seconds), 1)
+        while True:
+            try:
+                return int(process.wait(timeout=interval))
+            except subprocess.TimeoutExpired:
+                if heartbeat_callback is not None:
+                    heartbeat_callback()
+
+
+@dataclass(slots=True)
+class CrawlJobDispatchRequest:
+    source_code: str
+    crawl_job_id: int
+    job_type: str
+    max_pages: int | None
+    backfill_year: int | None
+
+
+class CrawlJobDispatcher(Protocol):
+    def dispatch(
+        self,
+        request: CrawlJobDispatchRequest,
+        *,
+        project_root: Path,
+        database_url: str,
+    ) -> None:
+        """Dispatch crawl job execution out of the request lifecycle."""
+
+
+class SubprocessCrawlJobDispatcher:
+    def dispatch(
+        self,
+        request: CrawlJobDispatchRequest,
+        *,
+        project_root: Path,
+        database_url: str,
+    ) -> None:
+        logs_dir = project_root / "logs" / "crawl_jobs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / f"crawl_job_{int(request.crawl_job_id)}.log"
+        command = self._build_command(request=request, database_url=database_url)
+        env = dict(os.environ)
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        with log_path.open("ab") as log_file:
+            subprocess.Popen(
+                command,
+                cwd=project_root,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=log_file,
+                env=env,
+                start_new_session=True,
+                close_fds=True,
+            )
+
+    def _build_command(self, *, request: CrawlJobDispatchRequest, database_url: str) -> list[str]:
+        command = [
+            sys.executable,
+            "-m",
+            "app.run_crawl_job",
+            "--database-url",
+            database_url,
+            "--source-code",
+            request.source_code,
+            "--crawl-job-id",
+            str(int(request.crawl_job_id)),
+            "--job-type",
+            request.job_type,
+        ]
+        if request.max_pages is not None:
+            command.extend(["--max-pages", str(int(request.max_pages))])
+        if request.backfill_year is not None:
+            command.extend(["--backfill-year", str(int(request.backfill_year))])
+        return command
+
+
+class SourceActiveCrawlJobConflictError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        source_code: str,
+        source_site_id: int,
+        active_job_id: int | None,
+        active_job_status: str | None,
+    ) -> None:
+        self.source_code = source_code
+        self.source_site_id = source_site_id
+        self.active_job_id = active_job_id
+        self.active_job_status = active_job_status
+        super().__init__(self._build_message())
+
+    def _build_message(self) -> str:
+        if self.active_job_id is not None and self.active_job_status:
+            return (
+                f"来源 {self.source_code} 已有进行中的抓取任务 #{self.active_job_id}"
+                f"（{self.active_job_status}），请等待当前任务结束后再试"
+            )
+        return f"来源 {self.source_code} 已有进行中的抓取任务，请等待当前任务结束后再试"
+
+
+class CrawlJobRetryConflictError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        original_job_id: int,
+        retry_job_id: int | None = None,
+    ) -> None:
+        self.original_job_id = original_job_id
+        self.retry_job_id = retry_job_id
+        super().__init__("job already retried")
+
+
+class CrawlJobRetryValidationError(RuntimeError):
+    pass
+
+
+class CrawlJobRetryNotFoundError(RuntimeError):
+    pass
 
 
 @dataclass(slots=True)
@@ -30,6 +172,11 @@ class SourceCrawlTriggerResult:
     job: CrawlJobSnapshot
     command: list[str]
     return_code: int
+
+
+@dataclass(slots=True)
+class SourceCrawlEnqueueResult:
+    job: CrawlJobSnapshot
 
 
 class SourceCrawlTriggerService:
@@ -40,10 +187,12 @@ class SourceCrawlTriggerService:
         *,
         session: Session,
         command_runner: CrawlCommandRunner | None = None,
+        job_dispatcher: CrawlJobDispatcher | None = None,
         project_root: Path | None = None,
     ) -> None:
         self.session = session
         self.command_runner = command_runner or SubprocessCrawlCommandRunner()
+        self.job_dispatcher = job_dispatcher or SubprocessCrawlJobDispatcher()
         self.project_root = project_root or Path(__file__).resolve().parents[2]
 
         bind = self.session.get_bind()
@@ -66,6 +215,25 @@ class SourceCrawlTriggerService:
             triggered_by=triggered_by,
             job_type="manual",
             message_prefix="source api trigger",
+            spider_args=self._build_spider_args(
+                max_pages=max_pages,
+                backfill_year=None,
+                job_type="manual",
+            ),
+        )
+
+    def queue_manual_crawl(
+        self,
+        *,
+        source: SourceSite,
+        max_pages: int | None,
+        triggered_by: str = "api",
+    ) -> SourceCrawlEnqueueResult:
+        return self._enqueue_crawl(
+            source=source,
+            triggered_by=triggered_by,
+            job_type="manual",
+            retry_of_job_id=None,
             spider_args=self._build_spider_args(
                 max_pages=max_pages,
                 backfill_year=None,
@@ -98,15 +266,12 @@ class SourceCrawlTriggerService:
         crawl_job_id: int,
         max_pages: int | None,
     ) -> SourceCrawlTriggerResult:
-        return self._run_existing_crawl_job(
+        return self.execute_crawl_job(
             source=source,
             crawl_job_id=crawl_job_id,
             job_type="manual",
-            spider_args=self._build_spider_args(
-                max_pages=max_pages,
-                backfill_year=None,
-                job_type="manual",
-            ),
+            max_pages=max_pages,
+            backfill_year=None,
         )
 
     def trigger_backfill_crawl(
@@ -124,6 +289,28 @@ class SourceCrawlTriggerService:
             triggered_by=triggered_by,
             job_type="backfill",
             message_prefix=f"source backfill trigger: backfill_year={backfill_year}",
+            spider_args=self._build_spider_args(
+                max_pages=max_pages,
+                backfill_year=backfill_year,
+                job_type="backfill",
+            ),
+        )
+
+    def queue_backfill_crawl(
+        self,
+        *,
+        source: SourceSite,
+        backfill_year: int,
+        max_pages: int | None,
+        triggered_by: str = "api-backfill",
+    ) -> SourceCrawlEnqueueResult:
+        if backfill_year < 2000:
+            raise ValueError("backfill_year must be >= 2000")
+        return self._enqueue_crawl(
+            source=source,
+            triggered_by=triggered_by,
+            job_type="backfill",
+            retry_of_job_id=None,
             spider_args=self._build_spider_args(
                 max_pages=max_pages,
                 backfill_year=backfill_year,
@@ -172,6 +359,92 @@ class SourceCrawlTriggerService:
             ),
         )
 
+    def queue_retry_crawl(
+        self,
+        *,
+        source: SourceSite,
+        retry_of_job_id: int,
+        max_pages: int | None,
+        backfill_year: int | None = None,
+        triggered_by: str = "admin-retry",
+    ) -> SourceCrawlEnqueueResult:
+        return self._enqueue_crawl(
+            source=source,
+            triggered_by=triggered_by,
+            job_type="manual_retry",
+            retry_of_job_id=retry_of_job_id,
+            spider_args=self._build_spider_args(
+                max_pages=max_pages,
+                backfill_year=backfill_year,
+                job_type="manual_retry",
+            ),
+        )
+
+    def queue_retry_crawl_for_job(
+        self,
+        *,
+        crawl_job_id: int,
+        max_pages: int | None,
+        triggered_by: str = "admin-retry",
+    ) -> SourceCrawlEnqueueResult:
+        job = self.session.get(CrawlJob, int(crawl_job_id))
+        if job is None:
+            raise CrawlJobRetryNotFoundError("crawl_job not found")
+        if str(job.status) not in {"failed", "partial"}:
+            raise CrawlJobRetryValidationError("only failed or partial job can be retried")
+        if job.retry_of_job_id is not None:
+            raise CrawlJobRetryValidationError("retry job cannot be retried again")
+
+        source = self.session.get(SourceSite, int(job.source_site_id))
+        if source is None:
+            raise CrawlJobRetryNotFoundError("source not found")
+
+        existing_retry = self._load_retry_job_for_original_job(original_job_id=int(job.id))
+        if existing_retry is not None:
+            raise self._build_retry_conflict(
+                original_job_id=int(job.id),
+                existing_retry=existing_retry,
+            )
+
+        message_fields = _parse_message_key_values(job.message)
+        inherited_backfill_year = _as_int_or_none(message_fields.get("backfill_year"))
+        inherited_max_pages = _as_int_or_none(message_fields.get("max_pages"))
+        resolved_max_pages = (
+            max_pages if max_pages is not None else inherited_max_pages or int(source.default_max_pages)
+        )
+
+        return self._enqueue_crawl(
+            source=source,
+            triggered_by=triggered_by,
+            job_type="manual_retry",
+            retry_of_job_id=int(job.id),
+            spider_args=self._build_spider_args(
+                max_pages=resolved_max_pages,
+                backfill_year=inherited_backfill_year,
+                job_type="manual_retry",
+            ),
+        )
+
+    def execute_crawl_job(
+        self,
+        *,
+        source: SourceSite,
+        crawl_job_id: int,
+        job_type: str,
+        max_pages: int | None,
+        backfill_year: int | None = None,
+    ) -> SourceCrawlTriggerResult:
+        return self._run_existing_crawl_job(
+            source=source,
+            crawl_job_id=crawl_job_id,
+            job_type=job_type,
+            spider_args=self._build_spider_args(
+                max_pages=max_pages,
+                backfill_year=backfill_year,
+                job_type=job_type,
+            ),
+        )
+
     def _trigger_crawl(
         self,
         *,
@@ -187,7 +460,12 @@ class SourceCrawlTriggerService:
             source=source,
             triggered_by=triggered_by,
             job_type=job_type,
-            message=f"{message_prefix}: {source.code}",
+            message=self._build_queued_job_message(
+                source_code=source.code,
+                job_type=job_type,
+                spider_args=normalized_spider_args,
+                retry_of_job_id=retry_of_job_id,
+            ),
             retry_of_job_id=retry_of_job_id,
         )
         return self._run_existing_crawl_job(
@@ -196,6 +474,56 @@ class SourceCrawlTriggerService:
             job_type=job_type,
             spider_args=normalized_spider_args,
         )
+
+    def _enqueue_crawl(
+        self,
+        *,
+        source: SourceSite,
+        triggered_by: str,
+        job_type: str,
+        retry_of_job_id: int | None = None,
+        spider_args: dict[str, str] | None = None,
+    ) -> SourceCrawlEnqueueResult:
+        normalized_spider_args = dict(spider_args or {})
+        job = self._create_crawl_job(
+            source=source,
+            triggered_by=triggered_by,
+            job_type=job_type,
+            message=self._build_queued_job_message(
+                source_code=source.code,
+                job_type=job_type,
+                spider_args=normalized_spider_args,
+                retry_of_job_id=retry_of_job_id,
+            ),
+            retry_of_job_id=retry_of_job_id,
+        )
+        request = CrawlJobDispatchRequest(
+            source_code=source.code,
+            crawl_job_id=job.id,
+            job_type=job_type,
+            max_pages=_as_int_or_none(normalized_spider_args.get("max_pages")),
+            backfill_year=_as_int_or_none(normalized_spider_args.get("backfill_year")),
+        )
+        try:
+            self.job_dispatcher.dispatch(
+                request,
+                project_root=self.project_root,
+                database_url=self.database_url,
+            )
+        except Exception as exc:
+            self.crawl_job_service.fail_job_if_active(
+                job.id,
+                message=self._build_failure_message(
+                    source_code=source.code,
+                    job_type=job_type,
+                    spider_args=normalized_spider_args,
+                    retry_of_job_id=retry_of_job_id,
+                    run_stage="dispatch_failed",
+                    failure_reason=f"后台任务派发失败：{exc}",
+                ),
+            )
+            raise RuntimeError(f"crawl job dispatch failed: {exc}") from exc
+        return SourceCrawlEnqueueResult(job=job)
 
     def _create_crawl_job(
         self,
@@ -207,18 +535,32 @@ class SourceCrawlTriggerService:
         retry_of_job_id: int | None,
     ) -> CrawlJobSnapshot:
         self._resolve_spider_name_for_source(source=source, job_type=job_type)
-        job = self.crawl_job_service.create_job_in_session(
-            self.session,
-            source_code=source.code,
-            source_name=source.name,
-            source_url=source.base_url,
-            job_type=job_type,
-            triggered_by=triggered_by,
-            retry_of_job_id=retry_of_job_id,
-            message=message,
-        )
-        job_id = int(job.id)
-        self.session.commit()
+        reconcile_expired_jobs_in_session(self.session)
+        self._raise_if_source_has_active_job(source=source)
+        try:
+            job = self.crawl_job_service.create_job_in_session(
+                self.session,
+                source_code=source.code,
+                source_name=source.name,
+                source_url=source.base_url,
+                job_type=job_type,
+                triggered_by=triggered_by,
+                retry_of_job_id=retry_of_job_id,
+                message=message,
+            )
+            job_id = int(job.id)
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            retry_conflict = self._resolve_retry_conflict_after_integrity_error(
+                retry_of_job_id=retry_of_job_id,
+                error=exc,
+            )
+            if retry_conflict is not None:
+                raise retry_conflict from exc
+            if self._is_source_active_job_integrity_error(exc):
+                raise self._build_source_active_job_conflict(source=source) from exc
+            raise
         snapshot = self.crawl_job_service.get_job(job_id)
         if snapshot is None:
             raise RuntimeError(f"crawl_job not found after creation: {job_id}")
@@ -252,7 +594,14 @@ class SourceCrawlTriggerService:
         self.crawl_job_service.start_job_in_session(
             self.session,
             job_id=int(crawl_job_id),
-            message=f"spider={spider_name}",
+            message=self._build_running_job_message(
+                source_code=source.code,
+                job_type=job_type,
+                spider_name=spider_name,
+                spider_args=normalized_spider_args,
+                retry_of_job_id=_as_job_retry_of_job_id(job),
+            ),
+            lease_seconds=DEFAULT_RUNNING_LEASE_SECONDS,
         )
         self.session.commit()
 
@@ -262,13 +611,37 @@ class SourceCrawlTriggerService:
             spider_args=normalized_spider_args,
         )
 
+        def _heartbeat_callback() -> None:
+            try:
+                self.crawl_job_service.heartbeat_job(
+                    int(crawl_job_id),
+                    lease_seconds=DEFAULT_RUNNING_LEASE_SECONDS,
+                )
+            except Exception:
+                LOGGER.warning(
+                    "crawl job heartbeat update failed: crawl_job_id=%s",
+                    crawl_job_id,
+                    exc_info=True,
+                )
+
         try:
-            return_code = self.command_runner.run(command, cwd=self.project_root / "crawler")
+            return_code = self.command_runner.run(
+                command,
+                cwd=self.project_root / "crawler",
+                heartbeat_callback=_heartbeat_callback,
+            )
         except Exception as exc:
             failed_snapshot = self.crawl_job_service.finish_job(
                 int(crawl_job_id),
                 status="failed",
-                message=f"command runner error: {exc}",
+                message=self._build_failure_message(
+                    source_code=source.code,
+                    job_type=job_type,
+                    spider_args=normalized_spider_args,
+                    retry_of_job_id=_as_job_retry_of_job_id(job),
+                    run_stage="runner_error",
+                    failure_reason=f"命令执行失败：{exc}",
+                ),
             )
             if failed_snapshot is None:
                 raise RuntimeError(f"crawl_job not found when command runner failed: {crawl_job_id}") from exc
@@ -323,6 +696,7 @@ class SourceCrawlTriggerService:
             command=command,
             return_code=return_code,
         )
+
     def _resolve_spider_name_for_source(self, *, source: SourceSite, job_type: str) -> str:
         adapter = get_source_adapter(source.code)
         if adapter is None:
@@ -463,6 +837,97 @@ class SourceCrawlTriggerService:
             summary_parts.append(f"return_code={return_code}")
         return "; ".join(summary_parts)
 
+    def _build_queued_job_message(
+        self,
+        *,
+        source_code: str,
+        job_type: str,
+        spider_args: dict[str, str],
+        retry_of_job_id: int | None,
+    ) -> str:
+        parts = self._build_context_parts(
+            source_code=source_code,
+            job_type=job_type,
+            spider_args=spider_args,
+            retry_of_job_id=retry_of_job_id,
+        )
+        parts.extend(
+            [
+                "run_stage=queued",
+                "failure_reason=-",
+            ]
+        )
+        return "; ".join(parts)
+
+    def _build_running_job_message(
+        self,
+        *,
+        source_code: str,
+        job_type: str,
+        spider_name: str,
+        spider_args: dict[str, str],
+        retry_of_job_id: int | None,
+    ) -> str:
+        parts = self._build_context_parts(
+            source_code=source_code,
+            job_type=job_type,
+            spider_args=spider_args,
+            retry_of_job_id=retry_of_job_id,
+        )
+        parts.extend(
+            [
+                f"spider={spider_name}",
+                "run_stage=running",
+            ]
+        )
+        return "; ".join(parts)
+
+    def _build_failure_message(
+        self,
+        *,
+        source_code: str,
+        job_type: str,
+        spider_args: dict[str, str],
+        retry_of_job_id: int | None,
+        run_stage: str,
+        failure_reason: str,
+    ) -> str:
+        parts = self._build_context_parts(
+            source_code=source_code,
+            job_type=job_type,
+            spider_args=spider_args,
+            retry_of_job_id=retry_of_job_id,
+        )
+        parts.extend(
+            [
+                f"run_stage={run_stage}",
+                f"failure_reason={failure_reason}",
+            ]
+        )
+        return "; ".join(parts)
+
+    def _build_context_parts(
+        self,
+        *,
+        source_code: str,
+        job_type: str,
+        spider_args: dict[str, str],
+        retry_of_job_id: int | None,
+    ) -> list[str]:
+        parts = [
+            f"source_code={source_code}",
+            f"job_type={job_type}",
+        ]
+        max_pages = (spider_args.get("max_pages") or "").strip()
+        if max_pages:
+            parts.append(f"max_pages={max_pages}")
+        backfill_year = (spider_args.get("backfill_year") or "").strip()
+        if backfill_year:
+            parts.append(f"backfill_year={backfill_year}")
+        if retry_of_job_id is not None:
+            parts.append(f"retry_of_job_id={int(retry_of_job_id)}")
+        return parts
+
     def _infer_failure_reason(
         self,
         *,
@@ -520,6 +985,87 @@ class SourceCrawlTriggerService:
             return normalized_reason
         return f"{prefix}: {normalized_reason}"
 
+    def _raise_if_source_has_active_job(self, *, source: SourceSite) -> None:
+        active_job = self._load_active_job_for_source(source_id=int(source.id))
+        if active_job is None:
+            return
+        raise self._build_source_active_job_conflict(source=source, active_job=active_job)
+
+    def _build_source_active_job_conflict(
+        self,
+        *,
+        source: SourceSite,
+        active_job: CrawlJob | None = None,
+    ) -> SourceActiveCrawlJobConflictError:
+        resolved_active_job = active_job or self._load_active_job_for_source(source_id=int(source.id))
+        return SourceActiveCrawlJobConflictError(
+            source_code=source.code,
+            source_site_id=int(source.id),
+            active_job_id=int(resolved_active_job.id) if resolved_active_job is not None else None,
+            active_job_status=str(resolved_active_job.status) if resolved_active_job is not None else None,
+        )
+
+    def _load_active_job_for_source(self, *, source_id: int) -> CrawlJob | None:
+        return self.session.scalar(
+            select(CrawlJob)
+            .where(
+                CrawlJob.source_site_id == int(source_id),
+                CrawlJob.status.in_(sorted(ACTIVE_CRAWL_JOB_STATUSES)),
+            )
+            .order_by(CrawlJob.id.desc())
+            .limit(1)
+        )
+
+    def _load_retry_job_for_original_job(self, *, original_job_id: int) -> CrawlJob | None:
+        return self.session.scalar(
+            select(CrawlJob)
+            .where(CrawlJob.retry_of_job_id == int(original_job_id))
+            .order_by(CrawlJob.id.desc())
+            .limit(1)
+        )
+
+    def _build_retry_conflict(
+        self,
+        *,
+        original_job_id: int,
+        existing_retry: CrawlJob | None = None,
+    ) -> CrawlJobRetryConflictError:
+        return CrawlJobRetryConflictError(
+            original_job_id=int(original_job_id),
+            retry_job_id=int(existing_retry.id) if existing_retry is not None else None,
+        )
+
+    def _resolve_retry_conflict_after_integrity_error(
+        self,
+        *,
+        retry_of_job_id: int | None,
+        error: IntegrityError,
+    ) -> CrawlJobRetryConflictError | None:
+        if retry_of_job_id is None:
+            return None
+
+        existing_retry = self._load_retry_job_for_original_job(original_job_id=int(retry_of_job_id))
+        if existing_retry is not None:
+            return self._build_retry_conflict(
+                original_job_id=int(retry_of_job_id),
+                existing_retry=existing_retry,
+            )
+        if self._is_retry_of_job_integrity_error(error):
+            return self._build_retry_conflict(original_job_id=int(retry_of_job_id))
+        return None
+
+    def _is_source_active_job_integrity_error(self, error: IntegrityError) -> bool:
+        raw_message = str(getattr(error, "orig", error)).lower()
+        return "uq_crawl_job_source_active" in raw_message or (
+            "unique constraint failed" in raw_message and "crawl_job.source_site_id" in raw_message
+        )
+
+    def _is_retry_of_job_integrity_error(self, error: IntegrityError) -> bool:
+        raw_message = str(getattr(error, "orig", error)).lower()
+        return "uq_crawl_job_retry_of_job_id" in raw_message or (
+            "unique constraint failed" in raw_message and "crawl_job.retry_of_job_id" in raw_message
+        )
+
 
 def _database_url_for_bind(bind: object) -> str:
     url = getattr(bind, "url", None)
@@ -529,3 +1075,35 @@ def _database_url_for_bind(bind: object) -> str:
     if callable(render_as_string):
         return str(render_as_string(hide_password=False))
     return str(url)
+
+
+def _as_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_job_retry_of_job_id(job: CrawlJob) -> int | None:
+    if job.retry_of_job_id is None:
+        return None
+    return int(job.retry_of_job_id)
+
+
+def _parse_message_key_values(message: str | None) -> dict[str, str]:
+    if not message:
+        return {}
+
+    parsed: dict[str, str] = {}
+    for part in message.split(";"):
+        chunk = part.strip()
+        if "=" not in chunk:
+            continue
+        key, value = chunk.split("=", maxsplit=1)
+        normalized_key = key.strip()
+        if not normalized_key:
+            continue
+        parsed[normalized_key] = value.strip()
+    return parsed

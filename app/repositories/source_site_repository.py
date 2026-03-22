@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -78,7 +78,6 @@ class SourceSiteRepository:
         default_max_pages: int | None,
     ) -> SourceSiteRecord:
         source = SourceSite(
-            id=self._next_source_id(),
             code=code,
             name=name,
             base_url=base_url,
@@ -102,9 +101,6 @@ class SourceSiteRepository:
             raise
         self.session.refresh(source)
         return self._to_record(source)
-
-    def _next_source_id(self) -> int:
-        return int(self.session.scalar(select(func.max(SourceSite.id))) or 0) + 1
 
     def _to_record(self, source: SourceSite) -> SourceSiteRecord:
         return SourceSiteRecord(

@@ -18,7 +18,7 @@ COPY scripts ./scripts
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -e . \
-    && chmod +x /app/scripts/app_entrypoint.sh /app/scripts/dev_up.sh
+    && chmod +x /app/scripts/*.sh
 
 EXPOSE 8000
 

@@ -10,21 +10,73 @@
 - Docker / Docker Compose
 - 可用端口：`8000`（FastAPI）、`5432`（PostgreSQL）
 
-### 1.2 一键启动（唯一推荐方式）
+### 1.2 Python 虚拟环境与依赖安装
+
+开发机统一推荐安装：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .[dev]
+python scripts/check_env.py --profile dev
+```
+
+若只需要执行测试，可使用最小测试安装：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .[test]
+python scripts/check_env.py --profile test
+```
+
+若只运行服务 / 迁移脚本，可安装基础依赖：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+python scripts/check_env.py --profile runtime
+```
+
+补充说明：
+- CI 必须固定执行 `python -m pip install -e .[dev]`，确保 `pytest`、`httpx`、`scrapy`、`playwright` 与服务依赖一并到位。
+- 如果要实际跑 Playwright 渲染链路，还需要额外安装浏览器：
+
+```bash
+python -m playwright install chromium
+```
+
+### 1.3 一键启动（唯一推荐方式）
 
 ```bash
 ./scripts/dev_up.sh
 ```
 
 脚本会自动完成：
-1. 启动 `postgres` + `app`
+1. 启动 `postgres`
 2. 等待 Postgres 可连接
 3. 执行 `alembic upgrade head`
-4. 执行 `python scripts/seed_sources.py --demo`
-5. 启动 `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+4. 启动 `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+5. 启动独立 scheduler：`python -m app.run_source_scheduler`
 6. 等待 `/healthz` 就绪
 
-### 1.3 健康检查
+如需填充演示来源，请显式执行：
+
+```bash
+APP_ENV=dev python scripts/seed_sources.py --demo
+```
+
+容器化部署时也应保持职责分离：
+- `scripts/migrate_entrypoint.sh`：迁移 job
+- `scripts/app_entrypoint.sh`：Web runtime
+- `python -m app.run_source_scheduler`：scheduler runtime
+- `scripts/seed_demo_entrypoint.sh`：仅演示环境可选执行
+
+### 1.4 健康检查
 
 ```bash
 curl "http://127.0.0.1:8000/healthz"
@@ -34,6 +86,16 @@ curl "http://127.0.0.1:8000/healthz"
 
 ```json
 {"status":"ok","service":"tender-phase1"}
+```
+
+### 1.5 测试前环境自检
+
+执行 pytest 前，先确认测试依赖完整：
+
+```bash
+source .venv/bin/activate
+python scripts/check_env.py --profile test
+pytest
 ```
 
 ## 2. 数据库迁移步骤
@@ -73,6 +135,16 @@ alembic current
 ```
 
 `alembic current` 需包含 `20260320_0007`，否则管理页可能因为缺列而 500。
+
+### 2.5 Demo 初始化边界
+
+```bash
+APP_ENV=dev python scripts/seed_sources.py --demo
+```
+
+- 该命令仅允许在显式非生产环境（`dev/local/test/demo`）执行
+- 若 `APP_ENV` 未设置或为生产环境，脚本会直接拒绝运行
+- 生产部署不要在 Web 启动链路中自动执行 demo seed
 
 ## 3. 运行真实样板源抓取步骤
 
@@ -296,7 +368,7 @@ lsof -i :5432
 
 修复：
 ```bash
-python scripts/seed_sources.py --demo
+APP_ENV=dev python scripts/seed_sources.py --demo
 ```
 
 验证：
@@ -306,7 +378,7 @@ curl "http://127.0.0.1:8000/sources"
 
 ## 7. 演示建议顺序（5-10 分钟）
 
-1. 执行来源初始化：`python scripts/seed_sources.py --demo`
+1. 执行来源初始化：`APP_ENV=dev python scripts/seed_sources.py --demo`
 2. `/healthz` 验证服务可用
 3. 打开 `/admin/home`、`/admin/source-sites` 确认来源已可见
 4. 运行一次样板源抓取（入库）

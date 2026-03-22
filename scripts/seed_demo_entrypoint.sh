@@ -6,5 +6,5 @@ cd "$PROJECT_ROOT"
 
 python scripts/wait_for_db.py
 
-echo "[entrypoint] starting uvicorn"
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+echo "[seed-demo] seeding demo sources"
+exec python scripts/seed_sources.py --demo

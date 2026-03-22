@@ -13,8 +13,16 @@ from app.services.raw_document_query_service import RawDocumentQueryService
 from app.services.crawl_error_query_service import CrawlErrorQueryService
 from app.services.stats_service import StatsService
 from app.services.source_crawl_trigger_service import (
+    CrawlJobRetryConflictError,
+    CrawlJobRetryNotFoundError,
+    CrawlJobRetryValidationError,
+    CrawlJobDispatchRequest,
+    CrawlJobDispatcher,
     CrawlCommandRunner,
+    SourceActiveCrawlJobConflictError,
+    SourceCrawlEnqueueResult,
     SourceCrawlTriggerResult,
+    SubprocessCrawlJobDispatcher,
     SourceCrawlTriggerService,
     SubprocessCrawlCommandRunner,
 )
@@ -63,8 +71,16 @@ __all__ = [
     "CrawlErrorQueryService",
     "StatsService",
     "SourceSiteService",
+    "CrawlJobRetryConflictError",
+    "CrawlJobRetryNotFoundError",
+    "CrawlJobRetryValidationError",
+    "CrawlJobDispatchRequest",
+    "CrawlJobDispatcher",
     "CrawlCommandRunner",
+    "SourceActiveCrawlJobConflictError",
+    "SubprocessCrawlJobDispatcher",
     "SubprocessCrawlCommandRunner",
+    "SourceCrawlEnqueueResult",
     "SourceCrawlTriggerResult",
     "SourceCrawlTriggerService",
     "SCHEDULE_DAY_OPTIONS",

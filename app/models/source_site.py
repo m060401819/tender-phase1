@@ -15,7 +15,11 @@ class SourceSite(TimestampMixin, Base):
     __tablename__ = "source_site"
     __table_args__ = (UniqueConstraint("code", name="uq_source_site_code"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     base_url: Mapped[str] = mapped_column(Text, nullable=False)

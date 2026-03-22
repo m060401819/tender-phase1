@@ -3,17 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Barrier, Event, Thread
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
-from app.api.endpoints.sources import get_crawl_command_runner
+from app.api.endpoints.sources import get_crawl_command_runner, get_crawl_job_dispatcher
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import CrawlError, CrawlJob, SourceSite
+from app.repositories import SourceSiteRepository
+from app.services import SourceCrawlTriggerService
 
 
 class StubRunner:
@@ -22,7 +25,15 @@ class StubRunner:
         self.commands: list[list[str]] = []
         self.cwd_values: list[Path] = []
 
-    def run(self, command: list[str], *, cwd: Path) -> int:
+    def run(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        heartbeat_callback=None,
+        heartbeat_interval_seconds: int = 30,
+    ) -> int:
+        _ = (heartbeat_callback, heartbeat_interval_seconds)
         self.commands.append(command)
         self.cwd_values.append(cwd)
         return self.return_code
@@ -34,7 +45,15 @@ class ErrorRecordingRunner(StubRunner):
         self.database_url = database_url
         self.error_message = error_message
 
-    def run(self, command: list[str], *, cwd: Path) -> int:
+    def run(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        heartbeat_callback=None,
+        heartbeat_interval_seconds: int = 30,
+    ) -> int:
+        _ = (heartbeat_callback, heartbeat_interval_seconds)
         result = super().run(command, cwd=cwd)
         crawl_job_id = _extract_crawl_job_id(command)
         engine = create_engine(self.database_url)
@@ -64,6 +83,53 @@ class ErrorRecordingRunner(StubRunner):
         finally:
             engine.dispose()
         return result
+
+
+class BlockingRunner(StubRunner):
+    def __init__(self, *, release_event: Event, return_code: int = 0) -> None:
+        super().__init__(return_code=return_code)
+        self.release_event = release_event
+        self.started_event = Event()
+
+    def run(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        heartbeat_callback=None,
+        heartbeat_interval_seconds: int = 30,
+    ) -> int:
+        _ = (heartbeat_callback, heartbeat_interval_seconds)
+        self.commands.append(command)
+        self.cwd_values.append(cwd)
+        self.started_event.set()
+        released = self.release_event.wait(timeout=5)
+        assert released, "blocking runner timed out waiting for release"
+        return self.return_code
+
+
+class InlineDispatcher:
+    def __init__(self, *, session_factory: sessionmaker, runner: StubRunner) -> None:
+        self.session_factory = session_factory
+        self.runner = runner
+
+    def dispatch(self, request, *, project_root: Path, database_url: str) -> None:  # type: ignore[no-untyped-def]
+        _ = database_url
+        with self.session_factory() as session:
+            source = SourceSiteRepository(session).get_model_by_code(request.source_code)
+            assert source is not None
+            service = SourceCrawlTriggerService(
+                session=session,
+                command_runner=self.runner,
+                project_root=project_root,
+            )
+            service.execute_crawl_job(
+                source=source,
+                crawl_job_id=request.crawl_job_id,
+                job_type=request.job_type,
+                max_pages=request.max_pages,
+                backfill_year=request.backfill_year,
+            )
 
 
 @dataclass(slots=True)
@@ -203,6 +269,9 @@ def _build_client(tmp_path: Path, *, runner: StubRunner) -> tuple[TestClient, se
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_crawl_command_runner] = lambda: runner
+    app.dependency_overrides[get_crawl_job_dispatcher] = (
+        lambda: InlineDispatcher(session_factory=session_factory, runner=runner)
+    )
     client = TestClient(app)
 
     return client, session_factory, engine
@@ -321,6 +390,93 @@ def test_create_source_success_and_duplicate_validation(tmp_path: Path) -> None:
         engine.dispose()
 
 
+def test_create_source_concurrent_requests_get_distinct_database_ids(tmp_path: Path, monkeypatch) -> None:
+    runner = StubRunner(return_code=0)
+    client, session_factory, engine = _build_client(tmp_path, runner=runner)
+    secondary_client = TestClient(app)
+    barrier = Barrier(2)
+    original_commit = Session.commit
+    concurrent_source_codes = {
+        "manual_concurrent_source_a",
+        "manual_concurrent_source_b",
+    }
+    try:
+        def _concurrent_commit(self) -> None:  # type: ignore[no-untyped-def]
+            pending_source_codes = {
+                source.code
+                for source in self.new
+                if isinstance(source, SourceSite) and source.code in concurrent_source_codes
+            }
+            if pending_source_codes:
+                barrier.wait(timeout=5)
+            return original_commit(self)
+
+        monkeypatch.setattr(Session, "commit", _concurrent_commit)
+
+        first_response: dict[str, object] = {}
+
+        def _send_first_request() -> None:
+            try:
+                first_response["value"] = client.post(
+                    "/sources",
+                    json={
+                        "source_code": "manual_concurrent_source_a",
+                        "source_name": "Manual Concurrent Source A",
+                        "official_url": "https://manual-concurrent-a.example.com/",
+                        "list_url": "https://manual-concurrent-a.example.com/list",
+                        "remark": "concurrent create a",
+                        "is_active": True,
+                        "schedule_enabled": False,
+                        "schedule_days": 1,
+                        "crawl_interval_minutes": 60,
+                    },
+                )
+            except Exception as exc:  # pragma: no cover - diagnostic guard for thread failure
+                first_response["error"] = exc
+
+        worker = Thread(target=_send_first_request)
+        worker.start()
+
+        second_response = secondary_client.post(
+            "/sources",
+            json={
+                "source_code": "manual_concurrent_source_b",
+                "source_name": "Manual Concurrent Source B",
+                "official_url": "https://manual-concurrent-b.example.com/",
+                "list_url": "https://manual-concurrent-b.example.com/list",
+                "remark": "concurrent create b",
+                "is_active": True,
+                "schedule_enabled": False,
+                "schedule_days": 1,
+                "crawl_interval_minutes": 60,
+            },
+        )
+
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert "error" not in first_response
+
+        first = first_response.get("value")
+        assert first is not None
+
+        responses = [first, second_response]
+        assert sorted(response.status_code for response in responses) == [201, 201]
+
+        with session_factory() as session:
+            sources = session.scalars(
+                select(SourceSite)
+                .where(SourceSite.code.in_(concurrent_source_codes))
+                .order_by(SourceSite.code.asc())
+            ).all()
+            assert len(sources) == 2
+            assert {source.code for source in sources} == concurrent_source_codes
+            assert len({int(source.id) for source in sources}) == 2
+    finally:
+        secondary_client.close()
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
 def test_patch_source_updates_config_fields(tmp_path: Path) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
@@ -427,7 +583,7 @@ def test_source_schedule_get_and_patch(tmp_path: Path) -> None:
 
 
 
-def test_trigger_manual_source_crawl_job_creates_job_and_runs_command(tmp_path: Path) -> None:
+def test_trigger_manual_source_crawl_job_creates_job_and_queues_worker(tmp_path: Path) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     try:
@@ -448,13 +604,15 @@ def test_trigger_manual_source_crawl_job_creates_job_and_runs_command(tmp_path: 
 
         payload = response.json()
         assert payload["source_code"] == seeded.code
-        assert payload["return_code"] == 0
         assert payload["job"]["job_type"] == "manual"
-        assert payload["job"]["status"] == "succeeded"
-        assert payload["job"]["started_at"] is not None
-        assert payload["job"]["finished_at"] is not None
-        assert "crawl anhui_ggzy_zfcg" in payload["command"]
-        assert "max_pages=2" in payload["command"]
+        assert payload["job"]["status"] == "pending"
+        assert payload["job"]["queued_at"] is not None
+        assert payload["job"]["picked_at"] is None
+        assert payload["job"]["started_at"] is None
+        assert payload["job"]["finished_at"] is None
+        assert payload["job"]["timeout_at"] is not None
+        assert "return_code" not in payload
+        assert "command" not in payload
 
         assert len(runner.commands) == 1
         assert runner.commands[0][0:4] == [runner.commands[0][0], "-m", "scrapy", "crawl"]
@@ -468,13 +626,15 @@ def test_trigger_manual_source_crawl_job_creates_job_and_runs_command(tmp_path: 
             assert jobs[0].job_type == "manual"
             assert jobs[0].status == "succeeded"
             assert jobs[0].triggered_by == "pytest"
+            assert jobs[0].queued_at is not None
+            assert jobs[0].picked_at is not None
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
 
 
 
-def test_trigger_manual_source_crawl_job_failed_when_command_nonzero(tmp_path: Path) -> None:
+def test_trigger_manual_source_crawl_job_returns_pending_snapshot_but_job_can_fail_later(tmp_path: Path) -> None:
     runner = StubRunner(return_code=9)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     try:
@@ -490,8 +650,12 @@ def test_trigger_manual_source_crawl_job_failed_when_command_nonzero(tmp_path: P
         response = client.post("/sources/anhui_ggzy_zfcg/crawl-jobs", json={"max_pages": 1})
         assert response.status_code == 201
         payload = response.json()
-        assert payload["return_code"] == 9
-        assert payload["job"]["status"] == "failed"
+        assert payload["job"]["status"] == "pending"
+
+        with session_factory() as session:
+            job = session.scalar(select(CrawlJob).where(CrawlJob.source_site_id == 1))
+            assert job is not None
+            assert job.status == "failed"
 
         not_found = client.post("/sources/not-found/crawl-jobs", json={"max_pages": 1})
         assert not_found.status_code == 404
@@ -522,25 +686,22 @@ def test_trigger_manual_source_crawl_job_marks_fetch_error_as_failed(tmp_path: P
         response = client.post("/sources/ggzy_gov_cn_deal/crawl-jobs", json={"max_pages": 1})
         assert response.status_code == 201
         payload = response.json()
-        assert payload["return_code"] == 0
-        assert payload["job"]["status"] == "failed"
-        assert payload["job"]["error_count"] == 1
-        assert "failure_reason=页面获取失败: 列表接口返回 code=800 message=系统繁忙，请稍后再试!" in (
-            payload["job"]["message"] or ""
-        )
-        assert "failure_reason=页面获取失败: 页面获取失败:" not in (payload["job"]["message"] or "")
+        assert payload["job"]["status"] == "pending"
+        assert payload["job"]["error_count"] == 0
 
         with session_factory() as session:
             job = session.scalar(select(CrawlJob).where(CrawlJob.source_site_id == 1))
             assert job is not None
             assert job.status == "failed"
             assert int(job.error_count or 0) == 1
+            assert "failure_reason=页面获取失败: 列表接口返回 code=800 message=系统繁忙，请稍后再试!" in (job.message or "")
+            assert "failure_reason=页面获取失败: 页面获取失败:" not in (job.message or "")
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
 
 
-def test_trigger_backfill_source_crawl_job_creates_job_and_passes_backfill_year(tmp_path: Path) -> None:
+def test_trigger_backfill_source_crawl_job_queues_job_and_passes_backfill_year(tmp_path: Path) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     try:
@@ -562,9 +723,7 @@ def test_trigger_backfill_source_crawl_job_creates_job_and_passes_backfill_year(
 
         payload = response.json()
         assert payload["job"]["job_type"] == "backfill"
-        assert payload["job"]["status"] == "succeeded"
-        assert "backfill_year=2026" in payload["command"]
-        assert "max_pages=999" in payload["command"]
+        assert payload["job"]["status"] == "pending"
 
         assert len(runner.commands) == 1
         command_text = " ".join(runner.commands[0])
@@ -575,6 +734,7 @@ def test_trigger_backfill_source_crawl_job_creates_job_and_passes_backfill_year(
             jobs = session.scalars(select(CrawlJob).order_by(CrawlJob.id.asc())).all()
             assert len(jobs) == 1
             assert jobs[0].job_type == "backfill"
+            assert jobs[0].status == "succeeded"
             assert jobs[0].triggered_by == "pytest-backfill"
 
         missing_year = client.post(
@@ -583,6 +743,72 @@ def test_trigger_backfill_source_crawl_job_creates_job_and_passes_backfill_year(
         )
         assert missing_year.status_code == 422
     finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_trigger_manual_source_crawl_job_rejects_concurrent_requests_for_same_source(tmp_path: Path) -> None:
+    release_event = Event()
+    runner = BlockingRunner(release_event=release_event, return_code=0)
+    client, session_factory, engine = _build_client(tmp_path, runner=runner)
+    secondary_client = TestClient(app)
+    try:
+        seeded = _insert_source(
+            session_factory=session_factory,
+            code="anhui_ggzy_zfcg",
+            name="Anhui GGZY",
+            base_url="https://ggzy.ah.gov.cn/",
+            supports_js_render=False,
+            crawl_interval_minutes=60,
+            default_max_pages=3,
+        )
+
+        first_response: dict[str, object] = {}
+
+        def _send_first_request() -> None:
+            try:
+                first_response["value"] = client.post(
+                    f"/sources/{seeded.code}/crawl-jobs",
+                    json={"max_pages": 2, "triggered_by": "pytest-concurrent-a"},
+                )
+            except Exception as exc:  # pragma: no cover - diagnostic guard for thread failure
+                first_response["error"] = exc
+
+        worker = Thread(target=_send_first_request)
+        worker.start()
+        assert runner.started_event.wait(timeout=5)
+
+        with session_factory() as session:
+            active_jobs = session.scalars(
+                select(CrawlJob).where(
+                    CrawlJob.source_site_id == 1,
+                    CrawlJob.status.in_(["pending", "running"]),
+                )
+            ).all()
+            assert len(active_jobs) == 1
+            assert active_jobs[0].status == "running"
+
+        second_response = secondary_client.post(
+            f"/sources/{seeded.code}/crawl-jobs",
+            json={"max_pages": 2, "triggered_by": "pytest-concurrent-b"},
+        )
+        assert second_response.status_code == 409
+        assert "已有进行中的抓取任务" in second_response.json()["detail"]
+
+        release_event.set()
+        worker.join(timeout=5)
+        assert "error" not in first_response
+        first = first_response.get("value")
+        assert first is not None
+        assert first.status_code == 201
+
+        with session_factory() as session:
+            jobs = session.scalars(select(CrawlJob).order_by(CrawlJob.id.asc())).all()
+            assert len(jobs) == 1
+            assert jobs[0].status == "succeeded"
+            assert jobs[0].triggered_by == "pytest-concurrent-a"
+    finally:
+        secondary_client.close()
         app.dependency_overrides.clear()
         engine.dispose()
 

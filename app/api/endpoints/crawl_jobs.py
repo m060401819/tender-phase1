@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
@@ -15,10 +14,18 @@ from app.api.schemas import (
     CrawlJobType,
 )
 from app.api.endpoints.sources import get_source_crawl_trigger_service
+from app.core.auth import require_ops_user
 from app.db.session import get_db
 from app.models import CrawlJob, SourceSite
 from app.repositories import CrawlJobRepository
-from app.services import CrawlJobQueryService, SourceCrawlTriggerService
+from app.services import (
+    CrawlJobQueryService,
+    CrawlJobRetryConflictError,
+    CrawlJobRetryNotFoundError,
+    CrawlJobRetryValidationError,
+    SourceActiveCrawlJobConflictError,
+    SourceCrawlTriggerService,
+)
 
 router = APIRouter(tags=["crawl-jobs"])
 
@@ -73,8 +80,13 @@ def get_crawl_job(job_id: int, db: Session = Depends(get_db)) -> CrawlJobDetailR
         retried_by_status=job.retried_by_status,
         retried_by_finished_at=job.retried_by_finished_at,
         retried_by_message=job.retried_by_message,
+        queued_at=job.queued_at,
+        picked_at=job.picked_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
+        heartbeat_at=job.heartbeat_at,
+        timeout_at=job.timeout_at,
+        lease_expires_at=job.lease_expires_at,
         pages_fetched=job.pages_fetched,
         documents_saved=job.documents_saved,
         notices_upserted=job.notices_upserted,
@@ -92,42 +104,36 @@ def get_crawl_job(job_id: int, db: Session = Depends(get_db)) -> CrawlJobDetailR
     )
 
 
-@router.post("/crawl-jobs/{job_id}/retry", response_model=CrawlJobRetryResponse, status_code=201)
+@router.post(
+    "/crawl-jobs/{job_id}/retry",
+    response_model=CrawlJobRetryResponse,
+    status_code=201,
+    dependencies=[Depends(require_ops_user)],
+)
 def retry_crawl_job(
     job_id: int,
     payload: CrawlJobRetryRequest,
     db: Session = Depends(get_db),
     trigger_service: SourceCrawlTriggerService = Depends(get_source_crawl_trigger_service),
 ) -> CrawlJobRetryResponse:
-    job = db.get(CrawlJob, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="crawl_job not found")
-
-    if job.status not in {"failed", "partial"}:
-        raise HTTPException(status_code=400, detail="only failed or partial job can be retried")
-    if job.retry_of_job_id is not None:
-        raise HTTPException(status_code=400, detail="retry job cannot be retried again")
-
-    existing_retry = db.scalar(select(CrawlJob.id).where(CrawlJob.retry_of_job_id == job_id))
-    if existing_retry is not None:
-        raise HTTPException(status_code=400, detail="job already retried")
-
-    source = db.get(SourceSite, job.source_site_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail="source not found")
-
-    message_fields = _parse_message_key_values(job.message)
-    inherited_backfill_year = _as_int(message_fields.get("backfill_year"))
-    inherited_max_pages = _as_int(message_fields.get("max_pages"))
-    max_pages = payload.max_pages if payload.max_pages is not None else inherited_max_pages or int(source.default_max_pages)
-    result = trigger_service.trigger_retry_crawl(
-        source=source,
-        retry_of_job_id=job_id,
-        max_pages=max_pages,
-        backfill_year=inherited_backfill_year,
-        triggered_by=payload.triggered_by,
-    )
+    try:
+        result = trigger_service.queue_retry_crawl_for_job(
+            crawl_job_id=job_id,
+            max_pages=payload.max_pages,
+            triggered_by=payload.triggered_by,
+        )
+    except CrawlJobRetryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CrawlJobRetryValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CrawlJobRetryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SourceActiveCrawlJobConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     retry_job = result.job
+    source = db.get(SourceSite, retry_job.source_site_id)
+    if source is None:
+        raise HTTPException(status_code=500, detail="retry job source missing")
 
     return CrawlJobRetryResponse(
         original_job_id=job_id,
@@ -143,8 +149,13 @@ def retry_crawl_job(
             retried_by_status=None,
             retried_by_finished_at=None,
             retried_by_message=None,
+            queued_at=retry_job.queued_at,
+            picked_at=retry_job.picked_at,
             started_at=retry_job.started_at,
             finished_at=retry_job.finished_at,
+            heartbeat_at=retry_job.heartbeat_at,
+            timeout_at=retry_job.timeout_at,
+            lease_expires_at=retry_job.lease_expires_at,
             pages_fetched=retry_job.pages_fetched,
             documents_saved=retry_job.documents_saved,
             notices_upserted=retry_job.notices_upserted,
@@ -159,8 +170,6 @@ def retry_crawl_job(
             source_duplicates_suppressed=retry_job.source_duplicates_suppressed,
             message=retry_job.message,
         ),
-        return_code=result.return_code,
-        command=" ".join(result.command),
     )
 
 
@@ -177,8 +186,13 @@ def _to_list_item(job) -> CrawlJobListItemResponse:  # type: ignore[no-untyped-d
         retried_by_status=job.retried_by_status,
         retried_by_finished_at=job.retried_by_finished_at,
         retried_by_message=job.retried_by_message,
+        queued_at=job.queued_at,
+        picked_at=job.picked_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
+        heartbeat_at=job.heartbeat_at,
+        timeout_at=job.timeout_at,
+        lease_expires_at=job.lease_expires_at,
         pages_fetched=job.pages_fetched,
         documents_saved=job.documents_saved,
         notices_upserted=job.notices_upserted,
@@ -193,28 +207,3 @@ def _to_list_item(job) -> CrawlJobListItemResponse:  # type: ignore[no-untyped-d
         source_duplicates_suppressed=job.source_duplicates_suppressed,
         message=job.message,
     )
-
-
-def _parse_message_key_values(message: str | None) -> dict[str, str]:
-    if not message:
-        return {}
-    parsed: dict[str, str] = {}
-    for part in message.split(";"):
-        chunk = part.strip()
-        if "=" not in chunk:
-            continue
-        key, value = chunk.split("=", maxsplit=1)
-        normalized_key = key.strip()
-        if not normalized_key:
-            continue
-        parsed[normalized_key] = value.strip()
-    return parsed
-
-
-def _as_int(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return None

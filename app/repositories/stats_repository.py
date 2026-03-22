@@ -70,6 +70,11 @@ class StatsRepository:
         recent_failed_job_limit: int = 10,
         recent_error_limit: int = 10,
     ) -> StatsOverviewRecord:
+        from app.services.crawl_job_service import reconcile_expired_jobs_in_session
+
+        expired_jobs = reconcile_expired_jobs_in_session(self.session)
+        if expired_jobs:
+            self.session.commit()
         return StatsOverviewRecord(
             source_count=int(self.session.scalar(select(func.count(SourceSite.id))) or 0),
             active_source_count=int(

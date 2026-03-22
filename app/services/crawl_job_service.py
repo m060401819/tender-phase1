@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import create_engine, func, select
@@ -13,6 +13,9 @@ from app.services.source_adapter_registry import normalize_source_code
 CRAWL_JOB_TYPES = {"manual", "scheduled", "backfill", "manual_retry"}
 CRAWL_JOB_STATUSES = {"pending", "running", "succeeded", "failed", "partial"}
 CRAWL_JOB_FINAL_STATUSES = {"succeeded", "failed", "partial"}
+ACTIVE_CRAWL_JOB_STATUSES = {"pending", "running"}
+DEFAULT_PENDING_LEASE_SECONDS = 120
+DEFAULT_RUNNING_LEASE_SECONDS = 1800
 
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"pending", "running", "failed"},
@@ -31,8 +34,13 @@ class CrawlJobSnapshot:
     status: str
     triggered_by: str | None
     retry_of_job_id: int | None
+    queued_at: datetime | None
+    picked_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
+    heartbeat_at: datetime | None
+    timeout_at: datetime | None
+    lease_expires_at: datetime | None
     pages_fetched: int
     documents_saved: int
     notices_upserted: int
@@ -102,9 +110,35 @@ class CrawlJobService:
         *,
         started_at: datetime | None = None,
         message: str | None = None,
+        lease_seconds: int = DEFAULT_RUNNING_LEASE_SECONDS,
     ) -> CrawlJobSnapshot | None:
         with self.session_factory() as session:
-            job = self.start_job_in_session(session, job_id=job_id, started_at=started_at, message=message)
+            job = self.start_job_in_session(
+                session,
+                job_id=job_id,
+                started_at=started_at,
+                message=message,
+                lease_seconds=lease_seconds,
+            )
+            if job is None:
+                return None
+            session.commit()
+            return _snapshot(job)
+
+    def heartbeat_job(
+        self,
+        job_id: int,
+        *,
+        heartbeat_at: datetime | None = None,
+        lease_seconds: int = DEFAULT_RUNNING_LEASE_SECONDS,
+    ) -> CrawlJobSnapshot | None:
+        with self.session_factory() as session:
+            job = self.heartbeat_job_in_session(
+                session,
+                job_id=job_id,
+                heartbeat_at=heartbeat_at,
+                lease_seconds=lease_seconds,
+            )
             if job is None:
                 return None
             session.commit()
@@ -170,6 +204,37 @@ class CrawlJobService:
             session.commit()
             return _snapshot(job)
 
+    def fail_job_if_active(
+        self,
+        job_id: int,
+        *,
+        message: str | None,
+        finished_at: datetime | None = None,
+    ) -> CrawlJobSnapshot | None:
+        with self.session_factory() as session:
+            job = self.fail_job_if_active_in_session(
+                session,
+                job_id=job_id,
+                message=message,
+                finished_at=finished_at,
+            )
+            if job is None:
+                return None
+            session.commit()
+            return _snapshot(job)
+
+    def reconcile_expired_jobs(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[CrawlJobSnapshot]:
+        with self.session_factory() as session:
+            jobs = reconcile_expired_jobs_in_session(session, now=now, limit=limit)
+            if jobs:
+                session.commit()
+            return [_snapshot(job) for job in jobs]
+
     def get_job(self, job_id: int) -> CrawlJobSnapshot | None:
         with self.session_factory() as session:
             job = session.get(CrawlJob, job_id)
@@ -201,6 +266,11 @@ class CrawlJobService:
             original_job = session.get(CrawlJob, normalized_retry_of_job_id)
             if original_job is None:
                 raise ValueError(f"retry_of_job_id not found: {normalized_retry_of_job_id}")
+        now = datetime.now(timezone.utc)
+        pending_timeout_at = _calculate_lease_expires_at(
+            now,
+            lease_seconds=DEFAULT_PENDING_LEASE_SECONDS,
+        )
         job = CrawlJob(
             **_model_create_kwargs(
                 session,
@@ -210,8 +280,13 @@ class CrawlJobService:
                 status="pending",
                 triggered_by=_as_str(triggered_by),
                 retry_of_job_id=normalized_retry_of_job_id,
+                queued_at=now,
+                picked_at=None,
                 started_at=None,
                 finished_at=None,
+                heartbeat_at=now,
+                timeout_at=pending_timeout_at,
+                lease_expires_at=pending_timeout_at,
                 pages_fetched=0,
                 documents_saved=0,
                 notices_upserted=0,
@@ -238,6 +313,7 @@ class CrawlJobService:
         job_id: int,
         started_at: datetime | None = None,
         message: str | None = None,
+        lease_seconds: int = DEFAULT_RUNNING_LEASE_SECONDS,
     ) -> CrawlJob | None:
         job = session.get(CrawlJob, job_id)
         if job is None:
@@ -245,14 +321,48 @@ class CrawlJobService:
 
         _ensure_transition(job.status, "running")
 
+        now = datetime.now(timezone.utc)
+        moment = started_at or now
+        lease_anchor = now
+        running_timeout_at = _calculate_lease_expires_at(lease_anchor, lease_seconds=lease_seconds)
+        if job.picked_at is None:
+            job.picked_at = moment
         if job.started_at is None:
-            job.started_at = started_at or datetime.now(timezone.utc)
+            job.started_at = moment
         job.finished_at = None
         job.status = "running"
+        job.heartbeat_at = lease_anchor
+        job.timeout_at = running_timeout_at
+        job.lease_expires_at = running_timeout_at
 
         normalized_message = _as_str(message)
         if normalized_message is not None:
             job.message = normalized_message
+        return job
+
+    def heartbeat_job_in_session(
+        self,
+        session: Session,
+        *,
+        job_id: int,
+        heartbeat_at: datetime | None = None,
+        lease_seconds: int = DEFAULT_RUNNING_LEASE_SECONDS,
+    ) -> CrawlJob | None:
+        job = session.get(CrawlJob, job_id)
+        if job is None:
+            return None
+        if job.status not in ACTIVE_CRAWL_JOB_STATUSES:
+            return job
+
+        moment = heartbeat_at or datetime.now(timezone.utc)
+        running_timeout_at = _calculate_lease_expires_at(moment, lease_seconds=lease_seconds)
+        if job.picked_at is None:
+            job.picked_at = moment
+        if job.started_at is None and job.status == "running":
+            job.started_at = moment
+        job.heartbeat_at = moment
+        job.timeout_at = running_timeout_at
+        job.lease_expires_at = running_timeout_at
         return job
 
     def record_stats_in_session(
@@ -340,18 +450,70 @@ class CrawlJobService:
         _ensure_transition(job.status, target_status)
 
         now = finished_at or datetime.now(timezone.utc)
+        if job.status == "running" and job.picked_at is None:
+            job.picked_at = job.started_at or now
         if job.started_at is None:
-            job.started_at = now
+            job.started_at = job.picked_at or job.created_at or now
         job.finished_at = now
         job.status = target_status
+        job.heartbeat_at = now
+        job.timeout_at = None
+        job.lease_expires_at = None
 
         normalized_message = _as_str(message)
         if normalized_message is not None:
             job.message = normalized_message
         return job
 
+    def fail_job_if_active_in_session(
+        self,
+        session: Session,
+        *,
+        job_id: int,
+        message: str | None,
+        finished_at: datetime | None = None,
+    ) -> CrawlJob | None:
+        job = session.get(CrawlJob, job_id)
+        if job is None:
+            return None
+        if job.status in CRAWL_JOB_FINAL_STATUSES:
+            return job
+        return self.finish_job_in_session(
+            session,
+            job_id=job_id,
+            status="failed",
+            message=message,
+            finished_at=finished_at,
+        )
+
     def _infer_success_status(self, job: CrawlJob) -> str:
         return "partial" if job.error_count > 0 else "succeeded"
+
+
+def reconcile_expired_jobs_in_session(
+    session: Session,
+    *,
+    now: datetime | None = None,
+    limit: int | None = None,
+) -> list[CrawlJob]:
+    moment = now or datetime.now(timezone.utc)
+    timeout_expr = func.coalesce(CrawlJob.timeout_at, CrawlJob.lease_expires_at)
+    stmt = (
+        select(CrawlJob)
+        .where(
+            CrawlJob.status.in_(sorted(ACTIVE_CRAWL_JOB_STATUSES)),
+            timeout_expr.is_not(None),
+            timeout_expr <= moment,
+        )
+        .order_by(timeout_expr.asc(), CrawlJob.id.asc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+
+    jobs = session.scalars(stmt).all()
+    for job in jobs:
+        _expire_job(job, now=moment)
+    return jobs
 
 
 def _ensure_source_site(
@@ -418,6 +580,53 @@ def _ensure_transition(current_status: str, next_status: str) -> None:
         raise ValueError(f"invalid crawl job status transition: {current_status} -> {next_status}")
 
 
+def _expire_job(job: CrawlJob, *, now: datetime) -> None:
+    original_status = str(job.status)
+    previous_heartbeat_at = job.heartbeat_at
+    previous_timeout_at = _resolve_timeout_at(job)
+    _ensure_transition(original_status, "failed")
+    job.started_at = job.started_at or job.picked_at or job.created_at or now
+    job.finished_at = now
+    job.status = "failed"
+    job.heartbeat_at = now
+    job.timeout_at = None
+    job.lease_expires_at = None
+    job.message = _append_message(
+        job.message,
+        _build_expired_job_message(
+            stage=original_status,
+            heartbeat_at=previous_heartbeat_at,
+            timeout_at=previous_timeout_at,
+        ),
+    )
+
+
+def _build_expired_job_message(
+    *,
+    stage: str,
+    heartbeat_at: datetime | None,
+    timeout_at: datetime | None,
+) -> str:
+    if stage == "pending":
+        failure_reason = "任务启动超时，后台执行未在租约内启动"
+    else:
+        failure_reason = "任务心跳超时，执行进程可能已退出或卡死"
+    parts = [
+        f"timeout_stage={stage}",
+        f"failure_reason={failure_reason}",
+        f"heartbeat_at={_format_datetime(heartbeat_at) or '-'}",
+        f"timeout_at={_format_datetime(timeout_at) or '-'}",
+    ]
+    return "; ".join(parts)
+
+
+def _calculate_lease_expires_at(moment: datetime, *, lease_seconds: int) -> datetime:
+    normalized_seconds = int(lease_seconds)
+    if normalized_seconds < 1:
+        raise ValueError("lease_seconds must be >= 1")
+    return moment + timedelta(seconds=normalized_seconds)
+
+
 def _normalize_job_type(value: str) -> str:
     normalized = _as_str(value)
     if not normalized:
@@ -450,8 +659,13 @@ def _snapshot(job: CrawlJob) -> CrawlJobSnapshot:
         status=job.status,
         triggered_by=job.triggered_by,
         retry_of_job_id=int(job.retry_of_job_id) if job.retry_of_job_id is not None else None,
+        queued_at=job.queued_at,
+        picked_at=job.picked_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
+        heartbeat_at=job.heartbeat_at,
+        timeout_at=_resolve_timeout_at(job),
+        lease_expires_at=job.lease_expires_at,
         pages_fetched=int(job.pages_fetched or 0),
         documents_saved=int(job.documents_saved or 0),
         notices_upserted=int(job.notices_upserted or 0),
@@ -473,6 +687,24 @@ def _as_str(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text if text else None
+
+
+def _append_message(existing: str | None, extra: str | None) -> str | None:
+    normalized_existing = _as_str(existing)
+    normalized_extra = _as_str(extra)
+    if normalized_existing and normalized_extra:
+        return f"{normalized_existing}; {normalized_extra}"
+    return normalized_existing or normalized_extra
+
+
+def _format_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
+
+
+def _resolve_timeout_at(job: CrawlJob) -> datetime | None:
+    return job.timeout_at or job.lease_expires_at
 
 
 def _model_create_kwargs(session: Session, model_cls: type, **kwargs: Any) -> dict[str, Any]:

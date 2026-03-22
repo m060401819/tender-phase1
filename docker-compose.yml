@@ -1,3 +1,4 @@
+# Development-only compose profile. Use docker-compose.prod.example.yml as the production deployment template.
 services:
   postgres:
     image: postgres:16-alpine
@@ -22,6 +23,9 @@ services:
     environment:
       APP_ENV: dev
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/tender_phase1
+      ADMIN_AUTH_SECRET: ""
+      LOG_LEVEL: INFO
+      SOURCE_SCHEDULER_EMBEDDED_ENABLED: "false"
     ports:
       - "8000:8000"
     volumes:
@@ -29,7 +33,30 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     command: ["/bin/bash", "/app/scripts/app_entrypoint.sh"]
+
+  scheduler:
+    build: .
+    container_name: tender_phase1_scheduler
+    environment:
+      APP_ENV: dev
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/tender_phase1
+      ADMIN_AUTH_SECRET: ""
+      LOG_LEVEL: INFO
+      SOURCE_SCHEDULER_EMBEDDED_ENABLED: "false"
+    volumes:
+      - ./:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    command: ["python", "-m", "app.run_source_scheduler"]
 
 volumes:
   postgres_data:

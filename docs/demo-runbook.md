@@ -19,8 +19,10 @@ alembic upgrade head
 3. 初始化真实样板来源（幂等）：
 
 ```bash
-python scripts/seed_sources.py --demo
+APP_ENV=dev python scripts/seed_sources.py --demo
 ```
+
+该步骤仅用于演示/开发环境，生产环境不要执行 demo seed。
 
 4. 启动 FastAPI：
 
@@ -77,6 +79,6 @@ python scripts/run_crawl_job.py \
 
 ## 4. 幂等说明
 
-`python scripts/seed_sources.py --demo` 可重复执行：
+`APP_ENV=dev python scripts/seed_sources.py --demo` 可重复执行：
 - 已存在 `anhui_ggzy_zfcg` 时执行更新
 - 不会插入重复 `source_code`

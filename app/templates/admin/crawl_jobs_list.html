@@ -280,6 +280,9 @@
               <span class="status {% if job.status == 'pending' %}status-pending{% elif job.status == 'running' %}status-running{% elif job.status == 'failed' %}status-failed{% elif job.status == 'partial' %}status-partial{% endif %}">
                 {{ job.status_label }}
               </span>
+              {% if job.is_stale %}
+              <div class="muted">租约已过期</div>
+              {% endif %}
             </td>
             <td>{{ job.started_at }}</td>
             <td>{{ job.finished_at }}</td>
@@ -312,7 +315,7 @@
             </td>
             <td class="actions">
               <a href="/admin/crawl-jobs/{{ job.id }}">详情</a>
-              {% if job.status in ['failed', 'partial'] and (not job.retried_by_job_id) and (not job.retry_of_job_id) %}
+              {% if can_retry_jobs and job.status in ['failed', 'partial'] and (not job.retried_by_job_id) and (not job.retry_of_job_id) %}
               <form method="post" action="/admin/crawl-jobs/{{ job.id }}/retry">
                 <button class="btn-inline" type="submit">重试</button>
               </form>

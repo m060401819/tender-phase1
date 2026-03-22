@@ -14,14 +14,18 @@ from app.api.schemas import (
     SourceSitePatchRequest,
     SourceSiteResponse,
 )
+from app.core.auth import require_admin_user, require_ops_user
 from app.db.session import get_db
 from app.repositories import SourceSiteRepository
 from app.services import (
     CrawlCommandRunner,
+    CrawlJobDispatcher,
+    SourceActiveCrawlJobConflictError,
     SourceHealthService,
     SourceCrawlTriggerService,
     SourceSiteService,
     SubprocessCrawlCommandRunner,
+    SubprocessCrawlJobDispatcher,
     get_source_adapter,
     supports_job_type,
     sync_source_schedule,
@@ -38,11 +42,16 @@ def get_crawl_command_runner() -> CrawlCommandRunner:
     return SubprocessCrawlCommandRunner()
 
 
+def get_crawl_job_dispatcher() -> CrawlJobDispatcher:
+    return SubprocessCrawlJobDispatcher()
+
+
 def get_source_crawl_trigger_service(
     db: Session = Depends(get_db),
     command_runner: CrawlCommandRunner = Depends(get_crawl_command_runner),
+    job_dispatcher: CrawlJobDispatcher = Depends(get_crawl_job_dispatcher),
 ) -> SourceCrawlTriggerService:
-    return SourceCrawlTriggerService(session=db, command_runner=command_runner)
+    return SourceCrawlTriggerService(session=db, command_runner=command_runner, job_dispatcher=job_dispatcher)
 
 
 def get_source_health_service(db: Session = Depends(get_db)) -> SourceHealthService:
@@ -89,7 +98,7 @@ def get_source(code: str, service: SourceSiteService = Depends(get_source_site_s
     )
 
 
-@router.post("/sources", response_model=SourceSiteResponse, status_code=201)
+@router.post("/sources", response_model=SourceSiteResponse, status_code=201, dependencies=[Depends(require_admin_user)])
 def create_source(
     payload: SourceSiteCreateRequest,
     db: Session = Depends(get_db),
@@ -132,7 +141,7 @@ def create_source(
     )
 
 
-@router.patch("/sources/{code}", response_model=SourceSiteResponse)
+@router.patch("/sources/{code}", response_model=SourceSiteResponse, dependencies=[Depends(require_admin_user)])
 def patch_source(
     code: str,
     payload: SourceSitePatchRequest,
@@ -214,7 +223,11 @@ def get_source_health(
     )
 
 
-@router.patch("/sources/{code}/schedule", response_model=SourceScheduleResponse)
+@router.patch(
+    "/sources/{code}/schedule",
+    response_model=SourceScheduleResponse,
+    dependencies=[Depends(require_admin_user)],
+)
 def patch_source_schedule(
     code: str,
     payload: SourceSchedulePatchRequest,
@@ -241,7 +254,12 @@ def patch_source_schedule(
     )
 
 
-@router.post("/sources/{code}/crawl-jobs", response_model=SourceCrawlJobTriggerResponse, status_code=201)
+@router.post(
+    "/sources/{code}/crawl-jobs",
+    response_model=SourceCrawlJobTriggerResponse,
+    status_code=201,
+    dependencies=[Depends(require_ops_user)],
+)
 def trigger_source_crawl_job(
     code: str,
     payload: SourceCrawlJobTriggerRequest,
@@ -266,21 +284,24 @@ def trigger_source_crawl_job(
         )
 
     max_pages = payload.max_pages if payload.max_pages is not None else int(source.default_max_pages)
-    if payload.job_type == "backfill":
-        if payload.backfill_year is None:
-            raise HTTPException(status_code=400, detail="backfill_year is required when job_type=backfill")
-        result = trigger_service.trigger_backfill_crawl(
-            source=source,
-            backfill_year=payload.backfill_year,
-            max_pages=max_pages,
-            triggered_by=payload.triggered_by,
-        )
-    else:
-        result = trigger_service.trigger_manual_crawl(
-            source=source,
-            max_pages=max_pages,
-            triggered_by=payload.triggered_by,
-        )
+    try:
+        if payload.job_type == "backfill":
+            if payload.backfill_year is None:
+                raise HTTPException(status_code=400, detail="backfill_year is required when job_type=backfill")
+            result = trigger_service.queue_backfill_crawl(
+                source=source,
+                backfill_year=payload.backfill_year,
+                max_pages=max_pages,
+                triggered_by=payload.triggered_by,
+            )
+        else:
+            result = trigger_service.queue_manual_crawl(
+                source=source,
+                max_pages=max_pages,
+                triggered_by=payload.triggered_by,
+            )
+    except SourceActiveCrawlJobConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     job = result.job
     return SourceCrawlJobTriggerResponse(
@@ -291,8 +312,19 @@ def trigger_source_crawl_job(
             source_code=source.code,
             job_type=job.job_type,
             status=job.status,
+            retry_of_job_id=job.retry_of_job_id,
+            retry_of_job_message=None,
+            retried_by_job_id=None,
+            retried_by_status=None,
+            retried_by_finished_at=None,
+            retried_by_message=None,
+            queued_at=job.queued_at,
+            picked_at=job.picked_at,
             started_at=job.started_at,
             finished_at=job.finished_at,
+            heartbeat_at=job.heartbeat_at,
+            timeout_at=job.timeout_at,
+            lease_expires_at=job.lease_expires_at,
             pages_fetched=job.pages_fetched,
             documents_saved=job.documents_saved,
             notices_upserted=job.notices_upserted,
@@ -307,6 +339,4 @@ def trigger_source_crawl_job(
             source_duplicates_suppressed=job.source_duplicates_suppressed,
             message=job.message,
         ),
-        return_code=result.return_code,
-        command=" ".join(result.command),
     )

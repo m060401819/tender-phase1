@@ -4,7 +4,7 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 import app.models  # noqa: F401
@@ -288,7 +288,7 @@ def _seed_data(session_factory: sessionmaker) -> None:
         session.commit()
 
 
-def _build_client(tmp_path: Path) -> tuple[TestClient, object]:
+def _build_client(tmp_path: Path) -> tuple[TestClient, sessionmaker, object]:
     db_url = f"sqlite+pysqlite:///{tmp_path / 'stats_overview_api.db'}"
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
@@ -305,11 +305,11 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, object]:
 
     app.dependency_overrides[get_db] = override_get_db
     client = TestClient(app)
-    return client, engine
+    return client, session_factory, engine
 
 
 def test_stats_overview_api_returns_counts_trends_and_recent_summaries(tmp_path: Path) -> None:
-    client, engine = _build_client(tmp_path)
+    client, _, engine = _build_client(tmp_path)
     try:
         response = client.get("/stats/overview")
         assert response.status_code == 200
@@ -352,6 +352,32 @@ def test_stats_overview_api_returns_counts_trends_and_recent_summaries(tmp_path:
 
         recent_errors = payload["recent_crawl_errors"]
         assert [item["id"] for item in recent_errors][:2] == [501, 502]
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_stats_overview_reconciles_expired_running_job(tmp_path: Path) -> None:
+    client, session_factory, engine = _build_client(tmp_path)
+    try:
+        with session_factory() as session:
+            running_job = session.get(CrawlJob, 701)
+            assert running_job is not None
+            running_job.heartbeat_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            running_job.timeout_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            running_job.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            session.commit()
+
+        response = client.get("/stats/overview")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["crawl_job_running_count"] == 0
+
+        with session_factory() as session:
+            refreshed = session.scalar(select(CrawlJob).where(CrawlJob.id == 701))
+            assert refreshed is not None
+            assert refreshed.status == "failed"
+            assert "timeout_stage=running" in (refreshed.message or "")
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

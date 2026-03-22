@@ -7,11 +7,13 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
-from app.api.endpoints.sources import get_crawl_command_runner
+from app.api.endpoints.sources import get_crawl_command_runner, get_crawl_job_dispatcher
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import CrawlJob, SourceSite
+from app.repositories import SourceSiteRepository
+from app.services import CrawlJobService, SourceCrawlTriggerService
 
 
 class StubRunner:
@@ -19,9 +21,41 @@ class StubRunner:
         self.return_code = return_code
         self.commands: list[list[str]] = []
 
-    def run(self, command: list[str], *, cwd: Path) -> int:
+    def run(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        heartbeat_callback=None,
+        heartbeat_interval_seconds: int = 30,
+    ) -> int:
+        _ = (cwd, heartbeat_callback, heartbeat_interval_seconds)
         self.commands.append(command)
         return self.return_code
+
+
+class InlineDispatcher:
+    def __init__(self, *, session_factory: sessionmaker, runner: StubRunner) -> None:
+        self.session_factory = session_factory
+        self.runner = runner
+
+    def dispatch(self, request, *, project_root: Path, database_url: str) -> None:  # type: ignore[no-untyped-def]
+        _ = database_url
+        with self.session_factory() as session:
+            source = SourceSiteRepository(session).get_model_by_code(request.source_code)
+            assert source is not None
+            service = SourceCrawlTriggerService(
+                session=session,
+                command_runner=self.runner,
+                project_root=project_root,
+            )
+            service.execute_crawl_job(
+                source=source,
+                crawl_job_id=request.crawl_job_id,
+                job_type=request.job_type,
+                max_pages=request.max_pages,
+                backfill_year=request.backfill_year,
+            )
 
 
 
@@ -68,6 +102,9 @@ def _build_client(tmp_path: Path, *, runner: StubRunner) -> tuple[TestClient, se
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_crawl_command_runner] = lambda: runner
+    app.dependency_overrides[get_crawl_job_dispatcher] = (
+        lambda: InlineDispatcher(session_factory=session_factory, runner=runner)
+    )
 
     client = TestClient(app)
     return client, session_factory, engine
@@ -192,6 +229,47 @@ def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Pat
         )
         assert invalid_submit.status_code == 400
         assert "提交失败" in invalid_submit.text
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_admin_source_pages_disable_and_reject_manual_trigger_when_active_job_exists(tmp_path: Path) -> None:
+    runner = StubRunner(return_code=0)
+    client, session_factory, engine = _build_client(tmp_path, runner=runner)
+    service = CrawlJobService(session_factory=session_factory)
+    try:
+        active_job = service.create_job(
+            source_code="anhui_ggzy_zfcg",
+            job_type="manual",
+            triggered_by="pytest-active",
+        )
+        service.start_job(active_job.id)
+
+        detail_page = client.get("/admin/sources/anhui_ggzy_zfcg")
+        assert detail_page.status_code == 200
+        assert "当前已有进行中的抓取任务" in detail_page.text
+        assert "disabled>抓取中</button>" in detail_page.text
+
+        list_page = client.get("/admin/source-sites")
+        assert list_page.status_code == 200
+        assert "disabled>抓取中</button>" in list_page.text
+
+        submit = client.post(
+            "/admin/sources/anhui_ggzy_zfcg/crawl-jobs",
+            data={"job_type": "manual", "max_pages": "1"},
+            follow_redirects=True,
+        )
+        assert submit.status_code == 200
+        assert "已有进行中的抓取任务" in submit.text
+
+        with session_factory() as session:
+            jobs = session.scalars(select(CrawlJob).order_by(CrawlJob.id.asc())).all()
+            assert len(jobs) == 1
+            assert jobs[0].id == active_job.id
+            assert jobs[0].status == "running"
+
+        assert len(runner.commands) == 0
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

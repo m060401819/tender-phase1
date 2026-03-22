@@ -32,8 +32,13 @@ class CrawlJobRecord:
     retried_by_job_id: int | None
     retried_by_status: str | None
     retried_by_finished_at: datetime | None
+    queued_at: datetime | None
+    picked_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
+    heartbeat_at: datetime | None
+    timeout_at: datetime | None
+    lease_expires_at: datetime | None
     pages_fetched: int
     documents_saved: int
     notices_upserted: int
@@ -82,9 +87,15 @@ class CrawlJobRepository:
         total = int(self.session.scalar(total_stmt) or 0)
 
         if order_by == "started_at":
+            order_anchor = func.coalesce(
+                CrawlJob.picked_at,
+                CrawlJob.queued_at,
+                CrawlJob.started_at,
+                CrawlJob.created_at,
+            )
             base = base.order_by(
-                CrawlJob.started_at.is_(None),
-                CrawlJob.started_at.desc(),
+                order_anchor.is_(None),
+                order_anchor.desc(),
                 CrawlJob.id.desc(),
             )
         else:
@@ -208,8 +219,13 @@ class CrawlJobRepository:
             retried_by_job_id=None,
             retried_by_status=None,
             retried_by_finished_at=None,
+            queued_at=job.queued_at,
+            picked_at=job.picked_at,
             started_at=job.started_at,
             finished_at=job.finished_at,
+            heartbeat_at=job.heartbeat_at,
+            timeout_at=job.timeout_at or job.lease_expires_at,
+            lease_expires_at=job.lease_expires_at,
             pages_fetched=int(job.pages_fetched or 0),
             documents_saved=int(job.documents_saved or 0),
             notices_upserted=int(job.notices_upserted or 0),

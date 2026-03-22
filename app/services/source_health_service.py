@@ -55,6 +55,11 @@ class SourceHealthService:
         self.session = session
 
     def get_source_health_by_code(self, code: str) -> SourceHealthSummary | None:
+        from app.services.crawl_job_service import reconcile_expired_jobs_in_session
+
+        expired_jobs = reconcile_expired_jobs_in_session(self.session)
+        if expired_jobs:
+            self.session.commit()
         source = self.session.scalar(select(SourceSite).where(SourceSite.code == code))
         if source is None:
             return None
@@ -62,6 +67,11 @@ class SourceHealthService:
         return summary_map.get(int(source.id))
 
     def build_health_map(self, sources: list[tuple[int, str]]) -> dict[int, SourceHealthSummary]:
+        from app.services.crawl_job_service import reconcile_expired_jobs_in_session
+
+        expired_jobs = reconcile_expired_jobs_in_session(self.session)
+        if expired_jobs:
+            self.session.commit()
         if not sources:
             return {}
 
@@ -105,7 +115,9 @@ class SourceHealthService:
                 latest_job_id=int(latest_job.id) if latest_job is not None else None,
                 latest_job_status=latest_status,
                 latest_job_status_label=JOB_STATUS_LABELS.get(latest_status or "", "-") if latest_status else "-",
-                latest_job_started_at=latest_job.started_at if latest_job is not None else None,
+                latest_job_started_at=(
+                    latest_job.picked_at or latest_job.started_at or latest_job.queued_at if latest_job is not None else None
+                ),
                 latest_notices_upserted=int(latest_job.notices_upserted or 0) if latest_job is not None else 0,
                 latest_error_count=int(latest_job.error_count or 0) if latest_job is not None else 0,
                 latest_list_items_seen=int(latest_job.list_items_seen or 0) if latest_job is not None else 0,
@@ -196,7 +208,10 @@ class SourceHealthService:
                     CrawlJob.source_site_id == source_id,
                     CrawlJob.status.in_(["failed", "partial"]),
                 )
-                .order_by(CrawlJob.started_at.desc(), CrawlJob.id.desc())
+                .order_by(
+                    func.coalesce(CrawlJob.picked_at, CrawlJob.queued_at, CrawlJob.started_at, CrawlJob.created_at).desc(),
+                    CrawlJob.id.desc(),
+                )
                 .limit(1)
             )
             if message is not None and str(message).strip():

@@ -75,6 +75,11 @@ while IFS= read -r pid; do
   candidate_map["$pid"]=1
 done < <(pgrep -f "app.main:app" || true)
 
+while IFS= read -r pid; do
+  [ -n "$pid" ] || continue
+  candidate_map["$pid"]=1
+done < <(pgrep -f "app.run_source_scheduler" || true)
+
 for pid in "${!port_pid_map[@]}"; do
   candidate_map["$pid"]=1
 done
@@ -85,6 +90,11 @@ for pid in "${!candidate_map[@]}"; do
   [ -n "$cmd" ] || continue
 
   if [[ "$cmd" == *"app.main:app"* ]]; then
+    target_map["$pid"]="$cmd"
+    continue
+  fi
+
+  if [[ "$cmd" == *"app.run_source_scheduler"* ]]; then
     target_map["$pid"]="$cmd"
     continue
   fi
@@ -112,6 +122,6 @@ else
   echo "[dev_down] 已保留 postgres（--keep-postgres）。"
 fi
 
-rm -f "$PROJECT_ROOT/logs/dev_web.pid"
+rm -f "$PROJECT_ROOT/logs/dev_web.pid" "$PROJECT_ROOT/logs/dev_scheduler.pid"
 
 echo "本地环境已停止"

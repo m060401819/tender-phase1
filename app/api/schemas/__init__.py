@@ -21,6 +21,10 @@ from app.api.schemas.notice import (
     RawDocumentSummaryResponse,
 )
 from app.api.schemas.source import (
+    SourceSiteAdminActiveCrawl,
+    SourceSiteAdminRow,
+    SourceSiteAdminRowActions,
+    SourceSitesAdminPageViewModel,
     SourceSiteCreateRequest,
     SourceCrawlJobTriggerRequest,
     SourceCrawlJobTriggerResponse,
@@ -90,6 +94,10 @@ __all__ = [
     "HealthRuleConfigResponse",
     "HealthRuleConfigPatchRequest",
     "SourceSiteResponse",
+    "SourceSiteAdminRowActions",
+    "SourceSiteAdminActiveCrawl",
+    "SourceSiteAdminRow",
+    "SourceSitesAdminPageViewModel",
     "SourceSiteCreateRequest",
     "SourceSitePatchRequest",
     "SourceCrawlJobTriggerRequest",

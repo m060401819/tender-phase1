@@ -38,8 +38,13 @@ class CrawlJobBaseResponse(BaseModel):
     retried_by_status: CrawlJobStatus | None = None
     retried_by_finished_at: datetime | None = None
     retried_by_message: str | None = None
+    queued_at: datetime | None
+    picked_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
+    heartbeat_at: datetime | None
+    timeout_at: datetime | None
+    lease_expires_at: datetime | None
 
     pages_fetched: int
     documents_saved: int
@@ -81,5 +86,3 @@ class CrawlJobRetryRequest(BaseModel):
 class CrawlJobRetryResponse(BaseModel):
     original_job_id: int
     retry_job: CrawlJobListItemResponse
-    return_code: int
-    command: str

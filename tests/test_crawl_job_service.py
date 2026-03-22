@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -24,6 +25,8 @@ def test_crawl_job_create_supports_all_job_types(tmp_path: Path) -> None:
             job = service.create_job(source_code=f"source_{job_type}", job_type=job_type)
             assert job.job_type == job_type
             assert job.status == "pending"
+            assert job.queued_at is not None
+            assert job.picked_at is None
             assert job.pages_fetched == 0
             assert job.documents_saved == 0
             assert job.notices_upserted == 0
@@ -36,6 +39,9 @@ def test_crawl_job_create_supports_all_job_types(tmp_path: Path) -> None:
             assert job.records_inserted == 0
             assert job.records_updated == 0
             assert job.source_duplicates_suppressed == 0
+            assert job.heartbeat_at is not None
+            assert job.timeout_at is not None
+            assert job.lease_expires_at is not None
     finally:
         service.close()
 
@@ -48,8 +54,13 @@ def test_crawl_job_start_record_stats_and_finish_success(tmp_path: Path) -> None
         running = service.start_job(created.id)
         assert running is not None
         assert running.status == "running"
+        assert running.queued_at is not None
+        assert running.picked_at is not None
         assert running.started_at is not None
         assert running.finished_at is None
+        assert running.heartbeat_at is not None
+        assert running.timeout_at is not None
+        assert running.lease_expires_at is not None
 
         updated = service.record_stats(
             created.id,
@@ -84,6 +95,9 @@ def test_crawl_job_start_record_stats_and_finish_success(tmp_path: Path) -> None
         assert finished is not None
         assert finished.status == "succeeded"
         assert finished.finished_at is not None
+        assert finished.heartbeat_at is not None
+        assert finished.timeout_at is None
+        assert finished.lease_expires_at is None
     finally:
         service.close()
 
@@ -99,6 +113,8 @@ def test_crawl_job_finish_failed(tmp_path: Path) -> None:
         assert finished.status == "failed"
         assert finished.finished_at is not None
         assert finished.message == "network timeout"
+        assert finished.timeout_at is None
+        assert finished.lease_expires_at is None
     finally:
         service.close()
 
@@ -114,5 +130,47 @@ def test_crawl_job_finish_partial_when_errors_exist(tmp_path: Path) -> None:
         assert finished is not None
         assert finished.status == "partial"
         assert finished.error_count == 1
+    finally:
+        service.close()
+
+
+def test_crawl_job_reconcile_expired_pending_job_marks_failed(tmp_path: Path) -> None:
+    service = _make_service(tmp_path / "crawl_job_expired_pending.db")
+    try:
+        created = service.create_job(source_code="anhui_ggzy_zfcg", job_type="manual")
+        expired = service.reconcile_expired_jobs(now=datetime.now(timezone.utc) + timedelta(minutes=5))
+        assert [item.id for item in expired] == [created.id]
+
+        refreshed = service.get_job(created.id)
+        assert refreshed is not None
+        assert refreshed.status == "failed"
+        assert refreshed.finished_at is not None
+        assert refreshed.timeout_at is None
+        assert refreshed.lease_expires_at is None
+        assert "failure_reason=任务启动超时" in (refreshed.message or "")
+        assert "timeout_stage=pending" in (refreshed.message or "")
+    finally:
+        service.close()
+
+
+def test_crawl_job_reconcile_expired_running_job_marks_failed(tmp_path: Path) -> None:
+    service = _make_service(tmp_path / "crawl_job_expired_running.db")
+    try:
+        created = service.create_job(source_code="anhui_ggzy_zfcg", job_type="manual")
+        service.start_job(created.id)
+        heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        service.heartbeat_job(created.id, heartbeat_at=heartbeat_at, lease_seconds=1)
+
+        expired = service.reconcile_expired_jobs(now=heartbeat_at + timedelta(seconds=2))
+        assert [item.id for item in expired] == [created.id]
+
+        refreshed = service.get_job(created.id)
+        assert refreshed is not None
+        assert refreshed.status == "failed"
+        assert refreshed.finished_at is not None
+        assert refreshed.timeout_at is None
+        assert refreshed.lease_expires_at is None
+        assert "timeout_stage=running" in (refreshed.message or "")
+        assert "failure_reason=任务心跳超时" in (refreshed.message or "")
     finally:
         service.close()

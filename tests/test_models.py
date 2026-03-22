@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, UniqueConstraint
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint
 from sqlalchemy.orm import configure_mappers
 
 import app.models  # noqa: F401
@@ -24,6 +24,14 @@ def _unique_sets(table_name: str) -> set[tuple[str, ...]]:
 def _check_sql(table_name: str) -> list[str]:
     table = _table(table_name)
     return [str(constraint.sqltext) for constraint in table.constraints if isinstance(constraint, CheckConstraint)]
+
+
+def _index(table_name: str, name: str) -> Index:
+    table = _table(table_name)
+    for index in table.indexes:
+        if index.name == name:
+            return index
+    raise AssertionError(f"index not found: {table_name}.{name}")
 
 
 def test_phase1_core_tables_are_registered() -> None:
@@ -75,6 +83,8 @@ def test_crawl_job_retry_fields_and_type_constraint_exist() -> None:
     table = _table("crawl_job")
     assert "retry_of_job_id" in table.c
     for column in [
+        "queued_at",
+        "picked_at",
         "list_items_seen",
         "list_items_unique",
         "list_items_source_duplicates_skipped",
@@ -82,10 +92,21 @@ def test_crawl_job_retry_fields_and_type_constraint_exist() -> None:
         "records_inserted",
         "records_updated",
         "source_duplicates_suppressed",
+        "heartbeat_at",
+        "timeout_at",
+        "lease_expires_at",
     ]:
         assert column in table.c
     checks = "\n".join(_check_sql("crawl_job"))
     assert "manual_retry" in checks
+    active_index = _index("crawl_job", "uq_crawl_job_source_active")
+    assert active_index.unique is True
+    where_clause = active_index.dialect_options["sqlite"].get("where")
+    if where_clause is None:
+        where_clause = active_index.dialect_options["postgresql"].get("where")
+    where_sql = str(where_clause) if where_clause is not None else ""
+    assert "pending" in where_sql
+    assert "running" in where_sql
 
 
 def test_health_rule_config_fields_exist() -> None:

@@ -146,6 +146,11 @@
         当前任务仍在执行，页面每 {{ auto_refresh_interval_seconds }} 秒自动刷新一次。
       </div>
       {% endif %}
+      {% if job.is_stale %}
+      <div class="notice">
+        当前任务租约已过期，系统已停止将其视为活跃任务，请检查后台执行链路并按需重试。
+      </div>
+      {% endif %}
       <div class="live-panel">
         <span class="tag">实时抓取进度</span><br />
         当前状态：{{ job.status_label }}<br />
@@ -164,8 +169,13 @@
         <div class="row"><span class="k">retried_by_status</span><span class="v">{{ job.retried_by_status or '-' }}</span></div>
         <div class="row"><span class="k">retried_by_finished_at</span><span class="v">{{ job.retried_by_finished_at }}</span></div>
         <div class="row"><span class="k">recent_crawl_error_count</span><span class="v">{{ job.recent_crawl_error_count }}</span></div>
+        <div class="row"><span class="k">queued_at</span><span class="v">{{ job.queued_at }}</span></div>
+        <div class="row"><span class="k">picked_at</span><span class="v">{{ job.picked_at }}</span></div>
         <div class="row"><span class="k">started_at</span><span class="v">{{ job.started_at }}</span></div>
         <div class="row"><span class="k">finished_at</span><span class="v">{{ job.finished_at }}</span></div>
+        <div class="row"><span class="k">heartbeat_at</span><span class="v">{{ job.heartbeat_at }}</span></div>
+        <div class="row"><span class="k">timeout_at</span><span class="v">{{ job.timeout_at }}</span></div>
+        <div class="row"><span class="k">lease_expires_at</span><span class="v">{{ job.lease_expires_at }}</span></div>
         <div class="row"><span class="k">backfill_year</span><span class="v">{{ job.backfill_year or '-' }}</span></div>
         <div class="row"><span class="k">pages_scraped</span><span class="v">{{ job.pages_scraped }}</span></div>
         <div class="row"><span class="k">pages_fetched</span><span class="v">{{ job.pages_fetched }}</span></div>

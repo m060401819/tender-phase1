@@ -201,6 +201,10 @@
       font-weight: 700;
       cursor: pointer;
     }
+    button:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
     .muted { color: var(--muted); }
     @media (max-width: 760px) {
       .head { flex-direction: column; align-items: flex-start; }
@@ -220,28 +224,30 @@
         </div>
         <div class="links">
           <a class="btn focus" href="/admin/notices">招标信息工作台</a>
+          {% if page.can_manage_sources %}
           <a class="btn" href="/admin/sources/new">新增来源网站</a>
           <a href="/admin/settings/health-rules">健康规则</a>
-          <a class="btn" href="{{ source_ops_report_url }}">导出运营日报</a>
+          {% endif %}
+          <a class="btn" href="{{ page.source_ops_report_url }}">导出运营日报</a>
         </div>
       </div>
       <div class="workbench-entry">
         <strong>业务优先入口：先进入招标信息工作台查看去重后的汇总清单。</strong>
         <a href="/admin/notices">前往 /admin/notices</a>
       </div>
-      {% if created_source_success %}
-      <div class="alert calm">新增成功：{{ created_source_code }}</div>
+      {% if page.created_source_success %}
+      <div class="alert calm">新增成功：{{ page.created_source_code }}</div>
       {% endif %}
-      {% if manual_crawl_error %}
-      <div class="alert">来源 {{ manual_crawl_error_source_code or '-' }}：{{ manual_crawl_error }}</div>
+      {% if page.manual_crawl_error %}
+      <div class="alert">来源 {{ page.manual_crawl_error_source_code or '-' }}：{{ page.manual_crawl_error }}</div>
       {% endif %}
-      {% if active_crawl_job_count %}
+      {% if page.active_crawl_job_count %}
       <div class="alert live" data-live-refresh="true">
-        检测到 {{ active_crawl_job_count }} 个来源存在进行中的抓取任务，页面每 {{ auto_refresh_interval_seconds }} 秒自动刷新一次。
+        检测到 {{ page.active_crawl_job_count }} 个来源存在进行中的抓取任务，页面每 {{ page.auto_refresh_interval_seconds }} 秒自动刷新一次。
       </div>
       {% endif %}
-      {% if show_new_notice_alert %}
-      <div class="alert">今日新增 {{ today_new_notice_count }} 条，最近24小时新增 {{ recent_24h_new_notice_count }} 条。</div>
+      {% if page.show_new_notice_alert %}
+      <div class="alert">今日新增 {{ page.today_new_notice_count }} 条，最近24小时新增 {{ page.recent_24h_new_notice_count }} 条。</div>
       {% else %}
       <div class="alert calm">今日新增 0 条，最近24小时暂无新增。</div>
       {% endif %}
@@ -268,107 +274,108 @@
             </tr>
           </thead>
           <tbody>
-            {% for source in sources %}
-            {% set source_actions = source.actions | default({}) %}
-            <tr class="{% if source.has_active_crawl|default(false) %}row-live{% elif source.health_status|default('') == 'critical' %}row-risk{% elif source.has_new_notice|default(false) %}row-hot{% endif %}">
+            {% for source in page.sources %}
+            <tr class="{% if source.has_active_crawl %}row-live{% elif source.health_status == 'critical' %}row-risk{% elif source.has_new_notice %}row-hot{% endif %}">
               <td>
-                <div>{{ source.name | default('-') }}</div>
-                <div class="muted">{{ source.code | default('-') }}</div>
-                <div class="muted">业务 code: {{ source.business_code | default('-') }}</div>
-                <div class="muted">支持模式: {{ source.supported_job_types_label | default('-') }}</div>
+                <div>{{ source.name }}</div>
+                <div class="muted">{{ source.code }}</div>
+                <div class="muted">业务 code: {{ source.business_code }}</div>
+                <div class="muted">支持模式: {{ source.supported_job_types_label }}</div>
               </td>
               <td>
                 <div>
-                  <a class="site-link" href="{{ source.official_url | default('#') }}" target="_blank" rel="noopener noreferrer">{{ source.official_url | default('-') }}</a>
+                  <a class="site-link" href="{{ source.official_url if source.official_url != '-' else '#' }}" target="_blank" rel="noopener noreferrer">{{ source.official_url }}</a>
                 </div>
-                <div class="muted">list_url: <a class="site-link" href="{{ source.list_url | default('#') }}" target="_blank" rel="noopener noreferrer">{{ source.list_url | default('-') }}</a></div>
+                <div class="muted">list_url: <a class="site-link" href="{{ source.list_url if source.list_url != '-' else '#' }}" target="_blank" rel="noopener noreferrer">{{ source.list_url }}</a></div>
               </td>
               <td>
-                {% if source.is_active|default(false) %}
+                {% if source.is_active %}
                 <span class="tag tag-on">已启用</span>
                 {% else %}
                 <span class="tag tag-off">已停用</span>
                 {% endif %}
               </td>
               <td>
-                <span class="tag {{ source.health_badge | default('tag-zero') }}">
-                  {{ source.health_status_label | default('未知') }}
+                <span class="tag {{ source.health_badge }}">
+                  {{ source.health_status_label }}
                 </span>
-                <div class="muted">7天错误 {{ source.recent_7d_error_count | default(0) }}</div>
+                <div class="muted">7天错误 {{ source.recent_7d_error_count }}</div>
               </td>
               <td>
-                {% if source.has_active_crawl|default(false) %}
+                {% if source.has_active_crawl %}
                 <div>
-                  <span class="tag tag-live">{{ source.active_crawl.status_label | default('抓取中') }}</span>
-                  <a class="site-link" href="{{ source.active_crawl.detail_url | default('/admin/crawl-jobs?source_code=' ~ source.code) }}">
-                    {{ source.active_crawl.job_type_label | default('抓取任务') }} #{{ source.active_crawl.id | default('-') }}
+                  <span class="tag tag-live">{{ source.active_crawl.status_label }}</span>
+                  <a class="site-link" href="{{ source.active_crawl.detail_url }}">
+                    {{ source.active_crawl.job_type_label }} #{{ source.active_crawl.id or '-' }}
                   </a>
                 </div>
-                <div class="muted">{{ source.active_crawl.stage_label | default('抓取中') }} / {{ source.active_crawl.summary_text | default('-') }}</div>
+                <div class="muted">{{ source.active_crawl.stage_label }} / {{ source.active_crawl.summary_text }}</div>
                 {% endif %}
-                <div>{{ source.last_crawl_result | default('-') }}</div>
+                <div>{{ source.last_crawl_result }}</div>
                 <div class="muted">
-                  列表 {{ source.latest_list_items_seen | default(0) }} /
-                  唯一 {{ source.latest_list_items_unique | default(0) }} /
-                  列表去重跳过 {{ source.latest_list_items_source_duplicates_skipped | default(0) }} /
-                  详情 {{ source.latest_detail_pages_fetched | default(0) }}
+                  列表 {{ source.latest_list_items_seen }} /
+                  唯一 {{ source.latest_list_items_unique }} /
+                  列表去重跳过 {{ source.latest_list_items_source_duplicates_skipped }} /
+                  详情 {{ source.latest_detail_pages_fetched }}
                 </div>
-                {% if source.has_source_duplicates_latest|default(false) %}
+                {% if source.has_source_duplicates_latest %}
                 <div class="muted" style="color:#b45309;">源站本次存在重复列表项，系统已自动抑制</div>
                 {% endif %}
               </td>
-              <td>{{ source.last_failure_summary | default('-') }}</td>
+              <td>{{ source.last_failure_summary }}</td>
               <td>
-                {% if source.schedule_enabled|default(false) %}
+                {% if source.schedule_enabled %}
                 <span class="tag tag-on">已启用</span>
                 {% else %}
                 <span class="tag tag-off">未启用</span>
                 {% endif %}
               </td>
-              <td>{{ source.schedule_days_label | default('-') }}</td>
-              <td>{{ source.next_scheduled_run_at | default('-') }}</td>
+              <td>{{ source.schedule_days_label }}</td>
+              <td>{{ source.next_scheduled_run_at }}</td>
               <td>
-                {% if source.has_active_crawl|default(false) and source.active_crawl.job_type|default('') == 'scheduled' %}
+                {% if source.has_active_crawl and source.active_crawl.job_type == 'scheduled' %}
                 <span class="tag tag-live">自动抓取进行中</span>
-                <div class="muted"><a class="site-link" href="{{ source.active_crawl.detail_url | default('/admin/crawl-jobs?source_code=' ~ source.code) }}">任务 #{{ source.active_crawl.id | default('-') }}</a></div>
+                <div class="muted"><a class="site-link" href="{{ source.active_crawl.detail_url }}">任务 #{{ source.active_crawl.id or '-' }}</a></div>
                 {% else %}
-                {{ source.last_schedule_status | default('-') }}
+                {{ source.last_schedule_status }}
                 {% endif %}
               </td>
-              <td>{{ source.last_crawled_at | default('-') }}</td>
+              <td>{{ source.last_crawled_at }}</td>
               <td>
-                {% if source.last_new_notice_count|default(0) > 0 %}
-                <span class="tag tag-new">新增 {{ source.last_new_notice_count | default(0) }} 条</span>
+                {% if source.last_new_notice_count > 0 %}
+                <span class="tag tag-new">新增 {{ source.last_new_notice_count }} 条</span>
                 {% else %}
                 <span class="tag tag-zero">新增 0 条</span>
                 {% endif %}
               </td>
               <td>
-                {{ source.today_ops_summary | default('成功 0 / 失败 0 / 新增 0') }}
-                <div class="muted">今日抓取 {{ source.today_crawl_job_count | default(0) }} 次</div>
+                {{ source.today_ops_summary }}
+                <div class="muted">今日抓取 {{ source.today_crawl_job_count }} 次</div>
               </td>
               <td>
-                {% if source.last_retry_job_id|default(none) %}
-                <span class="tag tag-on">{{ source.last_retry_label | default('-') }}</span>
+                {% if source.last_retry_job_id %}
+                <span class="tag tag-on">{{ source.last_retry_label }}</span>
                 <div><a class="site-link" href="/admin/crawl-jobs/{{ source.last_retry_job_id }}">任务 #{{ source.last_retry_job_id }}</a></div>
                 {% else %}
-                <span class="tag tag-zero">{{ source.last_retry_label | default('无') }}</span>
+                <span class="tag tag-zero">{{ source.last_retry_label }}</span>
                 {% endif %}
               </td>
               <td>
                 <div class="actions">
-                  <form method="post" action="{{ source_actions.manual_crawl_post_url | default('/admin/sources/' ~ source.code ~ '/manual-crawl') }}" style="margin-bottom:8px;">
+                  <form method="post" action="{{ source.actions.manual_crawl_post_url }}" style="margin-bottom:8px;" data-disable-on-submit="true">
                     <input type="hidden" name="return_to" value="source-sites" />
-                    <button type="submit" class="btn btn-success">手动抓取</button>
+                    <button type="submit" class="btn btn-success" {% if source.has_active_crawl %}disabled{% endif %}>{{ "抓取中" if source.has_active_crawl else "手动抓取" }}</button>
                   </form>
-                  <a class="site-link" href="{{ source_actions.crawl_jobs_url | default('/admin/crawl-jobs?source_code=' ~ source.code) }}">查看任务</a>
-                  <a class="site-link" href="{{ source_actions.crawl_errors_url | default('/admin/crawl-errors?source_code=' ~ source.code) }}">查看错误</a>
-                  <a class="site-link" href="{{ source_actions.config_url | default('/admin/sources/' ~ source.code) }}">配置</a>
+                  <a class="site-link" href="{{ source.actions.crawl_jobs_url }}">查看任务</a>
+                  <a class="site-link" href="{{ source.actions.crawl_errors_url }}">查看错误</a>
+                  {% if page.can_manage_sources %}
+                  <a class="site-link" href="{{ source.actions.config_url }}">配置</a>
+                  {% endif %}
                 </div>
               </td>
             </tr>
             {% endfor %}
-            {% if not sources %}
+            {% if not page.sources %}
             <tr>
               <td colspan="15" class="muted">暂无来源记录</td>
             </tr>
@@ -378,11 +385,23 @@
       </div>
     </div>
   </div>
-  {% if active_crawl_job_count %}
+  <script>
+    document.querySelectorAll('form[data-disable-on-submit="true"]').forEach(function (form) {
+      form.addEventListener('submit', function () {
+        var button = form.querySelector('button[type="submit"]');
+        if (!button || button.disabled) {
+          return;
+        }
+        button.disabled = true;
+        button.textContent = '提交中';
+      });
+    });
+  </script>
+  {% if page.active_crawl_job_count %}
   <script>
     window.setTimeout(function () {
       window.location.reload();
-    }, {{ auto_refresh_interval_seconds * 1000 }});
+    }, {{ page.auto_refresh_interval_seconds * 1000 }});
   </script>
   {% endif %}
 </body>

@@ -1,0 +1,40 @@
+# Production deployment template.
+# - Requires explicit runtime environment variables.
+# - Assumes PostgreSQL is provided externally.
+# - Keeps migration, web, and scheduler responsibilities separated.
+services:
+  migrate:
+    build: .
+    restart: "no"
+    environment: &runtime-env
+      APP_ENV: ${APP_ENV:?APP_ENV is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ADMIN_AUTH_SECRET: ${ADMIN_AUTH_SECRET:?ADMIN_AUTH_SECRET is required}
+      LOG_LEVEL: ${LOG_LEVEL:?LOG_LEVEL is required}
+      SOURCE_SCHEDULER_EMBEDDED_ENABLED: "false"
+    command: ["/bin/bash", "/app/scripts/migrate_entrypoint.sh"]
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment: *runtime-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: ["/bin/bash", "/app/scripts/app_entrypoint.sh"]
+
+  scheduler:
+    build: .
+    restart: unless-stopped
+    environment: *runtime-env
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["python", "-m", "app.run_source_scheduler"]

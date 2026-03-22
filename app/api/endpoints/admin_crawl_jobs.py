@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.endpoints.crawl_jobs import get_crawl_job, retry_crawl_job
 from app.api.endpoints.sources import get_source_crawl_trigger_service
 from app.api.schemas import CrawlJobOrderBy, CrawlJobRetryRequest, CrawlJobStatus, CrawlJobType
+from app.core.auth import AuthenticatedUser, UserRole, get_current_user, has_required_role, require_ops_user
 from app.db.session import get_db
 from app.repositories import CrawlJobRepository
 from app.services import CrawlJobQueryService, SourceCrawlTriggerService
@@ -36,6 +37,7 @@ def admin_crawl_jobs_list(
     limit: int = Query(default=20, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HTMLResponse:
     repository = CrawlJobRepository(db)
     normalized_ops_filter = ops_filter if ops_filter in OPS_FILTER_OPTIONS else ""
@@ -114,11 +116,12 @@ def admin_crawl_jobs_list(
         "active_job_count": active_job_count,
         "polling_enabled": polling_enabled,
         "auto_refresh_interval_seconds": 5,
+        "can_retry_jobs": has_required_role(current_user.role, UserRole.ops),
     }
     return TEMPLATES.TemplateResponse(name="admin/crawl_jobs_list.html", context=context, request=request)
 
 
-@router.post("/admin/crawl-jobs/{job_id}/retry")
+@router.post("/admin/crawl-jobs/{job_id}/retry", dependencies=[Depends(require_ops_user)])
 def admin_retry_crawl_job(
     job_id: int,
     db: Session = Depends(get_db),
@@ -141,6 +144,7 @@ def admin_crawl_job_detail(
     job_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HTMLResponse:
     payload = get_crawl_job(job_id=job_id, db=db)
     normalized_job_type = _enum_text(payload.job_type)
@@ -164,8 +168,13 @@ def admin_crawl_job_detail(
         "retried_by_status": normalized_retried_by_status,
         "retried_by_finished_at": _fmt_datetime(payload.retried_by_finished_at),
         "retried_by_message": payload.retried_by_message,
+        "queued_at": _fmt_datetime(payload.queued_at),
+        "picked_at": _fmt_datetime(payload.picked_at),
         "started_at": _fmt_datetime(payload.started_at),
         "finished_at": _fmt_datetime(payload.finished_at),
+        "heartbeat_at": _fmt_datetime(payload.heartbeat_at),
+        "timeout_at": _fmt_datetime(payload.timeout_at),
+        "lease_expires_at": _fmt_datetime(payload.lease_expires_at),
         "pages_fetched": payload.pages_fetched,
         "documents_saved": payload.documents_saved,
         "notices_upserted": payload.notices_upserted,
@@ -196,6 +205,7 @@ def admin_crawl_job_detail(
     job_dict.update(
         {
             "is_active": bool(progress["is_active"]),
+            "is_stale": bool(progress["is_stale"]),
             "job_type_label": progress["job_type_label"],
             "status_label": progress["status_label"],
             "progress_stage_label": progress["stage_label"],
@@ -216,8 +226,13 @@ def admin_crawl_job_detail(
             "retried_by_status": payload.retried_by_status,
             "retried_by_finished_at": payload.retried_by_finished_at.isoformat() if payload.retried_by_finished_at else None,
             "retried_by_message": payload.retried_by_message,
+            "queued_at": payload.queued_at.isoformat() if payload.queued_at else None,
+            "picked_at": payload.picked_at.isoformat() if payload.picked_at else None,
             "started_at": payload.started_at.isoformat() if payload.started_at else None,
             "finished_at": payload.finished_at.isoformat() if payload.finished_at else None,
+            "heartbeat_at": payload.heartbeat_at.isoformat() if payload.heartbeat_at else None,
+            "timeout_at": payload.timeout_at.isoformat() if payload.timeout_at else None,
+            "lease_expires_at": payload.lease_expires_at.isoformat() if payload.lease_expires_at else None,
             "pages_fetched": payload.pages_fetched,
             "documents_saved": payload.documents_saved,
             "notices_upserted": payload.notices_upserted,
@@ -253,7 +268,8 @@ def admin_crawl_job_detail(
         "job": job_dict,
         "can_retry": normalized_status in {"failed", "partial"}
         and payload.retry_of_job_id is None
-        and payload.retried_by_job_id is None,
+        and payload.retried_by_job_id is None
+        and has_required_role(current_user.role, UserRole.ops),
         "created_job_id": request.query_params.get("created_job_id", ""),
         "raw_json": raw_json,
         "auto_refresh_interval_seconds": 3,
@@ -280,8 +296,13 @@ def _list_item_to_dict(item: Any) -> dict[str, Any]:
         "retried_by_status": item.retried_by_status,
         "retried_by_finished_at": _fmt_datetime(item.retried_by_finished_at),
         "retried_by_message": item.retried_by_message,
+        "queued_at": _fmt_datetime(item.queued_at),
+        "picked_at": _fmt_datetime(item.picked_at),
         "started_at": _fmt_datetime(item.started_at),
         "finished_at": _fmt_datetime(item.finished_at),
+        "heartbeat_at": _fmt_datetime(item.heartbeat_at),
+        "timeout_at": _fmt_datetime(item.timeout_at),
+        "lease_expires_at": _fmt_datetime(item.lease_expires_at),
         "pages_fetched": item.pages_fetched,
         "documents_saved": item.documents_saved,
         "notices_upserted": item.notices_upserted,
@@ -299,6 +320,7 @@ def _list_item_to_dict(item: Any) -> dict[str, Any]:
     payload.update(
         {
             "is_active": bool(progress["is_active"]),
+            "is_stale": bool(progress["is_stale"]),
             "job_type_label": progress["job_type_label"],
             "status_label": progress["status_label"],
             "progress_stage_label": progress["stage_label"],
