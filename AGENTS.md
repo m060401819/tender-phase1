@@ -48,3 +48,8 @@ Important tags include:
 - Every task must include tests
 - Every task must update README
 - Run tests before marking complete
+
+## Review and reporting language
+- All audit reports, review summaries, risk analysis, and remediation plans must be written in Simplified Chinese.
+- File paths, function names, class names, and code identifiers may remain in English.
+- Be specific and actionable. Always include file paths and relevant functions/classes/modules when possible.
