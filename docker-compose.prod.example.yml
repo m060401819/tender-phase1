@@ -17,14 +17,16 @@ services:
   app:
     build: .
     restart: unless-stopped
-    environment: *runtime-env
+    environment:
+      <<: *runtime-env
+      AUTH_BASIC_USERS_JSON: ${AUTH_BASIC_USERS_JSON:?AUTH_BASIC_USERS_JSON is required}
     ports:
       - "8000:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5).read()"]
       interval: 10s
       timeout: 5s
       retries: 5

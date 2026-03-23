@@ -17,6 +17,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the standalone source scheduler process.")
     parser.add_argument("--database-url", default=None)
     parser.add_argument("--refresh-interval-seconds", type=int, default=None)
+    parser.add_argument("--dispatch-interval-seconds", type=int, default=None)
     return parser
 
 
@@ -43,9 +44,11 @@ def main(argv: list[str] | None = None) -> int:
 
     database_url = args.database_url or settings.database_url
     refresh_interval_seconds = args.refresh_interval_seconds or settings.source_scheduler_refresh_interval_seconds
+    dispatch_interval_seconds = args.dispatch_interval_seconds or settings.crawl_job_dispatch_interval_seconds
     runtime = initialize_source_schedule_runtime(
         database_url,
         refresh_interval_seconds=refresh_interval_seconds,
+        dispatch_interval_seconds=dispatch_interval_seconds,
     )
 
     LOGGER.info(
@@ -55,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             job_type="scheduled",
             triggered_by="standalone_scheduler",
             refresh_interval_seconds=refresh_interval_seconds,
+            dispatch_interval_seconds=dispatch_interval_seconds,
             database_url_configured=bool(database_url),
         ),
     )

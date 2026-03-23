@@ -17,6 +17,7 @@ from app.api.endpoints.sources import get_crawl_command_runner, get_crawl_job_di
 from app.main import app
 from app.models import CrawlError, CrawlJob
 from app.repositories import SourceSiteRepository
+from app.services.crawl_job_payloads import build_job_params_payload
 from app.services import CrawlJobService, SourceCrawlTriggerService
 
 
@@ -296,6 +297,9 @@ def test_crawl_job_detail_returns_core_fields_and_recent_error_count(tmp_path: P
         assert payload["records_inserted"] == 0
         assert payload["records_updated"] == 0
         assert payload["source_duplicates_suppressed"] == 0
+        assert "job_params_json" in payload
+        assert "runtime_stats_json" in payload
+        assert "failure_reason" in payload
 
         not_found = client.get("/crawl-jobs/999999")
         assert not_found.status_code == 404
@@ -304,12 +308,13 @@ def test_crawl_job_detail_returns_core_fields_and_recent_error_count(tmp_path: P
         engine.dispose()
 
 
-def test_crawl_job_detail_reconciles_expired_pending_job(tmp_path: Path) -> None:
+def test_crawl_job_detail_keeps_expired_pending_job_recoverable(tmp_path: Path) -> None:
     client, seeded, session_factory, _, engine = _build_client(tmp_path)
     try:
         with session_factory() as session:
             job = session.get(CrawlJob, seeded.pending_job_id)
             assert job is not None
+            job.picked_at = datetime.now(timezone.utc) - timedelta(minutes=2)
             job.timeout_at = datetime.now(timezone.utc) - timedelta(minutes=1)
             job.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
             session.commit()
@@ -317,11 +322,11 @@ def test_crawl_job_detail_reconciles_expired_pending_job(tmp_path: Path) -> None
         response = client.get(f"/crawl-jobs/{seeded.pending_job_id}")
         assert response.status_code == 200
         payload = response.json()
-        assert payload["status"] == "failed"
-        assert payload["timeout_at"] is None
-        assert payload["lease_expires_at"] is None
-        assert "timeout_stage=pending" in (payload["message"] or "")
-        assert "failure_reason=任务启动超时" in (payload["message"] or "")
+        assert payload["status"] == "pending"
+        assert payload["picked_at"] is not None
+        assert payload["timeout_at"] is not None
+        assert payload["lease_expires_at"] is not None
+        assert "timeout_stage=pending" not in (payload["message"] or "")
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
@@ -344,8 +349,9 @@ def test_crawl_job_detail_reconciles_expired_running_job(tmp_path: Path) -> None
         assert payload["status"] == "failed"
         assert payload["timeout_at"] is None
         assert payload["lease_expires_at"] is None
-        assert "timeout_stage=running" in (payload["message"] or "")
-        assert "failure_reason=任务心跳超时" in (payload["message"] or "")
+        assert payload["failure_reason"] == "任务心跳超时，执行进程可能已退出或卡死"
+        assert payload["runtime_stats_json"]["timeout_stage"] == "running"
+        assert "任务执行超时" in (payload["message"] or "")
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
@@ -410,6 +416,44 @@ def test_crawl_job_retry_partial_job_is_allowed(tmp_path: Path) -> None:
         assert payload["retry_job"]["retry_of_job_id"] == seeded.partial_job_id
         assert payload["retry_job"]["status"] == "pending"
         assert len(runner.commands) == 1
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_crawl_job_retry_inherits_structured_job_params_without_parsing_message(tmp_path: Path) -> None:
+    client, _, session_factory, runner, engine = _build_client(tmp_path)
+    try:
+        service = CrawlJobService(session_factory=session_factory)
+        now = datetime.now(timezone.utc)
+        failed = service.create_job(
+            source_code="ggzy_gov_cn_deal",
+            job_type="backfill",
+            triggered_by="pytest-backfill",
+            job_params_json=build_job_params_payload(
+                source_code="ggzy_gov_cn_deal",
+                job_type="backfill",
+                triggered_by="pytest-backfill",
+                max_pages=123,
+                backfill_year=2026,
+            ),
+            message="这是一条人工摘要，不包含任何可解析参数",
+        )
+        service.start_job(failed.id, started_at=now - timedelta(hours=2), message="任务执行中")
+        service.finish_job(
+            failed.id,
+            status="failed",
+            failure_reason="页面获取失败：示例异常",
+            message="任务失败：页面获取失败：示例异常",
+        )
+
+        response = client.post(f"/crawl-jobs/{failed.id}/retry", json={"triggered_by": "api-retry"})
+        assert response.status_code == 201
+        assert len(runner.commands) == 1
+
+        command_text = " ".join(runner.commands[0])
+        assert "backfill_year=2026" in command_text
+        assert "max_pages=123" in command_text
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

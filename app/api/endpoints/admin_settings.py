@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.api.endpoints.settings import get_health_rule_service
+from app.core.auth import AuthenticatedUser, get_current_user, render_admin_template, require_admin_csrf
 from app.services import HealthRuleService
 
 router = APIRouter(tags=["admin-settings"])
@@ -21,10 +22,10 @@ _BOOL_FALSE_SET = {"0", "false", "no", "off"}
 def admin_health_rule_config_page(
     request: Request,
     service: HealthRuleService = Depends(get_health_rule_service),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HTMLResponse:
     rules = service.get_rules()
     context = {
-        "request": request,
         "updated": request.query_params.get("updated") == "1",
         "rules": {
             "recent_error_warning_threshold": rules.recent_error_warning_threshold,
@@ -34,13 +35,20 @@ def admin_health_rule_config_page(
             "partial_warning_enabled": rules.partial_warning_enabled,
         },
     }
-    return TEMPLATES.TemplateResponse(name="admin/health_rules_settings.html", context=context, request=request)
+    return render_admin_template(
+        templates=TEMPLATES,
+        request=request,
+        name="admin/health_rules_settings.html",
+        context=context,
+        current_user=current_user,
+    )
 
 
 @router.post("/admin/settings/health-rules")
 async def admin_update_health_rule_config(
     request: Request,
     service: HealthRuleService = Depends(get_health_rule_service),
+    _csrf_protected: None = Depends(require_admin_csrf),
 ) -> RedirectResponse:
     body = (await request.body()).decode("utf-8")
     form_data = parse_qs(body)

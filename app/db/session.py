@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -15,3 +18,14 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def get_session_bind(session: Session) -> Engine | Connection:
+    bind = session.get_bind()
+    if bind is None:
+        raise RuntimeError("database bind is unavailable")
+    return bind
+
+
+def ping_database(session: Session) -> None:
+    session.execute(select(1)).scalar_one()

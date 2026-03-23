@@ -59,7 +59,7 @@ alembic current
 - 源站重复自动双重去重：
   - 抓取阶段：同一次 job 内列表重复项不再请求详情
   - 入库阶段：优先按 `external_id/detail_url` 判重，再按 `title+publish_date+issuer+budget+region` 业务键判重
-- `crawl_job.message` 会写入回填摘要：`backfill_year/pages_scraped/list_items_seen/detail_requests/dedup_skipped/notices_written/raw_documents_written/first_publish_date_seen/last_publish_date_seen`
+- `crawl_job` 现在会同时写入结构化上下文字段：`job_params_json/runtime_stats_json/failure_reason`；`message` 仅保留面向人的摘要文本。
 
 ## 0.6 `/admin/source-sites` 稳定性修复
 
@@ -84,7 +84,8 @@ alembic current
   - 同来源已有 `pending/running` 任务时，API 返回 `409`
   - 后台页面会回显“已有进行中的抓取任务”，并禁用手动触发按钮防连点
   - 自动调度命中互斥时会记为 `last_schedule_status=skipped`，不再误记为失败
-  - 已补回归测试覆盖：管理页双击触发、`running/pending` 租约超时恢复、以及双 scheduler 实例重复触发时的单来源互斥，见 `tests/test_manual_crawl_trigger.py`、`tests/test_crawl_job_service.py`、`tests/test_crawl_job_api.py`、`tests/test_source_schedule_service.py`
+  - `pending` 任务现在以 durable queue 形式保留，独立 scheduler/dispatcher 会继续扫描未领取或派发租约过期的任务并重试消费
+  - 已补回归测试覆盖：后台入队、pending 延迟消费/派发失败、`running` 租约超时恢复，以及双 scheduler 实例重复触发时的单来源互斥，见 `tests/test_manual_crawl_trigger.py`、`tests/test_crawl_job_service.py`、`tests/test_crawl_job_api.py`、`tests/test_source_schedule_service.py`
 
 ## 0.8 异常任务重试并发安全
 
@@ -105,7 +106,8 @@ alembic current
 - Web 请求会透传或自动生成 `X-Request-ID`，并在响应头回写同名 header，便于把页面操作、后台任务和服务日志串到同一链路。
 - 建议在日志平台建立以下告警：
   - `event=source_scheduler_startup_skipped`
-  - `event=manual_crawl_background_failed`
+  - `event=crawl_job_dispatch_retry`
+  - `event=crawl_job_dispatch_abandoned`
   - `event=crawl_worker_failed`
   - `crawl_job.status in (pending, running)` 且持续时间超过运营阈值（例如 15 分钟）
 - 当前仓库只提供结构化日志字段与告警事件基线；集中日志采集、告警路由和通知升级仍需在部署环境中接入。
@@ -160,7 +162,9 @@ DEV_UP_REUSE_RUNNING=1 bash scripts/dev_up.sh
 ## 0.1 快速演示路径（5-10 分钟）
 
 1. 一键启动：`bash scripts/dev_up.sh`
-2. 健康检查：`curl "http://127.0.0.1:8000/healthz"`
+2. 健康检查：
+   - 存活检查：`curl "http://127.0.0.1:8000/healthz"`
+   - 就绪检查：`curl "http://127.0.0.1:8000/readyz"`
 3. 运行样板源抓取（入库，建议先抓 3 页验证翻页）：`python scripts/run_crawl_job.py --spider anhui_ggzy_zfcg --source-code anhui_ggzy_zfcg --job-type manual --writer-backend sqlalchemy --spider-arg max_pages=3`
 4. 演示主入口：`/admin/notices`
 5. 演示来源运营：`/admin/source-sites`
@@ -212,8 +216,8 @@ DEV_UP_REUSE_RUNNING=1 bash scripts/dev_up.sh
 
 ## 1.1 认证与权限边界
 
-- 后台与运营写接口已默认启用 HTTP Basic 认证；未配置账号时，受保护接口会返回 `401`。
-- 当前仓库本地开发默认示例可直接使用：
+- 后台与运营写接口已默认启用 HTTP Basic 认证；真实生效的登录凭据来源是 `AUTH_BASIC_USERS_JSON`，未配置账号时受保护接口会返回 `401`。
+- `docker-compose.yml` 与 `.env.example` 的本地开发示例默认提供以下账号：
   - `viewer_user / change-me-viewer`
   - `ops_user / change-me-ops`
   - `admin_user / change-me-admin`
@@ -231,12 +235,17 @@ DEV_UP_REUSE_RUNNING=1 bash scripts/dev_up.sh
   - `viewer`：可访问只读后台页面（如 `/admin/dashboard`、`/admin/notices`、`/admin/raw-documents`、`/admin/crawl-jobs`）。
   - `ops`：继承 `viewer`，可访问 `/admin/source-sites`、触发抓取、重试失败任务、导出运营日报。
   - `admin`：继承 `ops`，可新增来源、修改来源配置、修改调度配置、维护健康规则。
+- `ADMIN_AUTH_SECRET` 不参与 HTTP Basic 账号匹配；它只用于为后台页面签发/校验 `admin_csrf_token` 的签名，保护已登录管理员的 `/admin/*` 写操作不被伪造请求利用。
+- 后台写操作现在统一启用 CSRF 防护：
+  - 服务端会为后台页面签发 `admin_csrf_token` Cookie，并在后台写表单中注入隐藏字段 `csrf_token`。
+  - 所有 `/admin/*` 写操作都会同时校验 Cookie 与表单 token；缺失、错误或过期时返回 `403` 中文错误页，不会直接抛 `500`。
+  - 失败日志会记录 `event=csrf_validation_failed`，便于排查被拦截的提交。
 - 当前已收口的受保护入口：
   - 后台页面：`/admin/*`
   - 运营报表：`/reports/source-ops.xlsx`
   - 配置接口：`POST /sources`、`PATCH /sources/{code}`、`PATCH /sources/{code}/schedule`、`/settings/health-rules`
   - 运维写接口：`POST /sources/{code}/crawl-jobs`、`POST /crawl-jobs/{job_id}/retry`
-- 公开查询接口仍保持开放，例如：`/healthz`、`/sources`、`/sources/{code}`、`/sources/{code}/health`、`/notices`、`/raw-documents`。
+- 公开查询接口仍保持开放，例如：`/healthz`、`/readyz`、`/sources`、`/sources/{code}`、`/sources/{code}/health`、`/notices`、`/raw-documents`。
 
 ## 1.2 运行时配置约束
 
@@ -248,6 +257,7 @@ DEV_UP_REUSE_RUNNING=1 bash scripts/dev_up.sh
   - `ADMIN_AUTH_SECRET`
   - `LOG_LEVEL`
 - 生产环境若缺少上述任一变量，进程会直接拒绝启动。
+- `AUTH_BASIC_USERS_JSON` 不是所有进程共享的全局强制项，但 Web 后台真实登录就依赖它；生产 `app` 服务若不注入该变量，`/admin/*` 与其他受保护入口会持续返回 `401`。
 - 生产环境若 `DATABASE_URL` 仍等于默认开发库 `postgresql+psycopg://postgres:postgres@localhost:5432/tender_phase1`，进程也会直接拒绝启动，避免误连本地/默认口令数据库。
 - `LOG_LEVEL` 支持：`DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL`（兼容 `WARN`/`FATAL` 别名）。
 - `.env.example` 仅作为开发示例，不可直接当作生产配置文件使用。
@@ -319,6 +329,8 @@ python scripts/check_env.py --profile runtime
 python -m playwright install chromium
 ```
 
+- 后台真实浏览器 E2E（`tests/test_admin_e2e_playwright.py`）同样依赖上述 Chromium；测试会自行拉起临时 FastAPI + SQLite，不依赖你手动先跑 `uvicorn`。
+
 ## 3. 本地一键启动
 
 ### 3.1 Linux / WSL
@@ -349,6 +361,9 @@ bash scripts/dev_down.sh
 访问入口：
 - Web 地址：`http://127.0.0.1:8000/admin/home`
 - Docs 地址：`http://127.0.0.1:8000/docs`
+- 健康探针：
+  - `/healthz`：轻量 liveness，仅用于确认 Web 进程仍在存活
+  - `/readyz`：readiness，会检查数据库连通性、关键表可查询，以及 Alembic revision 是否已到代码 head；容器 healthcheck 与流量接入应使用该接口
 
 ### 3.2 Windows
 
@@ -370,7 +385,7 @@ APP_ENV=dev python scripts/seed_sources.py --demo  # 仅演示环境需要
 
 生产部署约束：
 - 不要直接使用仓库内的 `docker-compose.yml`。
-- 请从 `docker-compose.prod.example.yml` 复制出自己的生产编排文件，并显式注入 `APP_ENV/DATABASE_URL/ADMIN_AUTH_SECRET/LOG_LEVEL`。
+- 请从 `docker-compose.prod.example.yml` 复制出自己的生产编排文件，并显式注入 `APP_ENV/DATABASE_URL/ADMIN_AUTH_SECRET/LOG_LEVEL`；其中 `app` 服务还需要额外注入 `AUTH_BASIC_USERS_JSON` 作为后台 Basic 认证账号来源。
 - 若缺少关键变量，或 `DATABASE_URL` 仍是默认开发库地址，应用会直接拒绝启动。
 
 终端 1 启动 Web：
@@ -428,8 +443,11 @@ alembic upgrade head
 - `scripts/seed_demo_entrypoint.sh`：一次性 demo 来源初始化入口，只应用于演示/开发环境。
 - `python scripts/seed_sources.py --demo` 现在要求显式设置 `APP_ENV=dev/local/test/demo`；未设置或为 `prod/production` 时会直接拒绝执行。
 - 生产运行态必须显式提供 `APP_ENV`、`DATABASE_URL`、`ADMIN_AUTH_SECRET`、`LOG_LEVEL`；缺失任一项时，Web / scheduler / worker 进程都会在启动前失败退出。
+- `AUTH_BASIC_USERS_JSON` 的真实用途是 Web 后台 HTTP Basic 认证；`docker-compose.prod.example.yml` 已要求仅对 `app` 服务显式注入该变量，避免把“后台登录账号”误写成所有运行进程的统一强制项。
 - `docker-compose.yml` 仅保留开发默认值；生产请使用 `docker-compose.prod.example.yml` 模板并接入外部 PostgreSQL。
-- 生产部署建议按职责拆分为：`migration job` -> `app runtime` -> `scheduler runtime`（`python -m app.run_source_scheduler`）-> `worker runtime`（抓取 worker 进程/容器），避免 Web 容器启动即改库或污染真实数据。
+- Web 容器健康检查应探测 `/readyz`，不要再用 `/healthz` 代替真实可接流状态；`/healthz` 仅保留为轻量存活探针。
+- 因为 `/readyz` 会校验 Alembic head，若数据库尚未执行 `alembic upgrade head`，`app` 容器会持续显示 `unhealthy`；这属于真实未就绪，而不是探针误报。
+- 生产部署建议按职责拆分为：`migration job` -> `app runtime` -> `scheduler runtime`（`python -m app.run_source_scheduler`，同时负责 schedule refresh + pending dispatcher）-> `worker subprocess/runtime`，避免 Web 容器启动即改库或污染真实数据。
 
 ## 6. Scrapy 采集启动
 
@@ -589,8 +607,14 @@ python scripts/run_crawl_job.py \
 说明：
 - spider 外部运行方式不变，仍可直接 `scrapy crawl ...`
 - 若要记录 `crawl_job` 统计，请使用 `crawl_job_id` 并开启 `sqlalchemy` writer
-- 任务结束后 `crawl_job.message` 会汇总关键字段（含 `backfill_year/pages_scraped/dedup_skipped/first_publish_date_seen/last_publish_date_seen`），可直接在 `/admin/crawl-jobs/{id}` 查看
-- 当任务停留在 `pending/running` 且租约过期时，查询/API/统计入口会自动将其收敛为 `failed`，避免长期假活跃状态
+- 任务创建/运行/完成/失败时会把上下文稳定写入 `crawl_job.job_params_json`、`crawl_job.runtime_stats_json`、`crawl_job.failure_reason`
+- `crawl_job.message` 仅保留人类可读摘要；后台详情页、失败摘要与 retry 参数继承都改为读取结构化字段，不再依赖字符串切分
+- `pending -> running` 的 worker 启动改为数据库原子领取：单条条件 `UPDATE` 只允许一个 worker 成功把同一 `crawl_job_id` 切到 `running`
+- 重复启动同一 `crawl_job_id` 时，后续 worker 会在真正执行 spider 前直接退出，不会出现两个 worker 同时跑同一任务
+- `running -> running` 不再视为合法“重复启动”；若 `running` 任务租约超时，会先由过期收敛逻辑标记为 `failed`，再走人工重试/新任务恢复
+- 允许被重新领取的只有 `pending` 任务：首次未领取，或 dispatcher 启动租约超时后的 `pending` 任务；`running` 任务不直接接管
+- `running` 任务在心跳租约过期后会被查询/API/统计入口自动收敛为 `failed`
+- `pending` 任务不会再因为“尚未被 dispatcher 领取”而自动失败；只有派发重试耗尽时才会显式进入 `failed`
 
 详情见：`docs/crawl-job.md`
 
@@ -762,6 +786,7 @@ curl -X PATCH "http://127.0.0.1:8000/settings/health-rules" \
 - Web 进程默认**不再内嵌** APScheduler，避免多 `uvicorn worker` / 多容器 / 多副本重复恢复并注册同一批来源调度
 - 自动调度应通过独立进程或容器启动：`python -m app.run_source_scheduler`，`docker-compose.yml` 已提供 `scheduler` 服务
 - 独立 scheduler 会每 `SOURCE_SCHEDULER_REFRESH_INTERVAL_SECONDS` 秒（默认 `30`）从数据库刷新来源调度配置，并清理已删除来源的陈旧 job
+- 同一个独立 scheduler 也会每 `CRAWL_JOB_DISPATCH_INTERVAL_SECONDS` 秒（默认 `5`）扫描 `pending` 抓取任务，并派发 `worker` 子进程执行
 - 如需本地临时启用嵌入式模式，可设置 `SOURCE_SCHEDULER_EMBEDDED_ENABLED=true`
 - 即使误部署多个 scheduler 副本，数据库层的来源活跃任务唯一索引也会把同来源重复触发收敛为“1 个执行 + 其余 skipped/冲突返回”；这能防止重复执行，但不是 leader election 的替代方案
 - 当前仍为单个 APScheduler 实例，不包含 Celery/Redis/RabbitMQ；若部署多个 `scheduler` 副本，仍需要额外的 leader election 或分布式锁方案
@@ -779,17 +804,21 @@ curl -X PATCH "http://127.0.0.1:8000/settings/health-rules" \
 
 从后台手动抓取（全新 manual 任务，不复用 retry）：
 1. 打开 `/admin/source-sites`
-2. 点击目标来源的“手动抓取”（页面使用 `POST /admin/sources/{code}/manual-crawl` 表单提交，不走 `<a href>` 直链）
+2. 点击目标来源的“手动抓取”（页面使用 `POST /admin/sources/{code}/manual-crawl` 表单提交，不走 `<a href>` 直链；后台会同步校验 CSRF token）
 3. 系统创建 `job_type=manual` 且 `triggered_by=admin_ui` 的新任务
 4. 自动跳转到 `/admin/crawl-jobs?source_code={code}&created_job_id={job_id}`，任务看板会显示新建任务编号
 5. 若任务创建失败，来源运营页会直接回显错误，不再静默跳转
-6. 后台执行仍为进程内 `BackgroundTasks` 最小实现，不是 durable queue；但现在任何后台异常都会显式将 `crawl_job` 落为 `failed`
-7. 新建任务会写入 `queued_at / heartbeat_at / timeout_at`；任务真正开始执行时会补齐 `picked_at`，Spider 运行期间持续回写心跳
-8. `/admin/crawl-jobs`、`/admin/crawl-jobs/{id}`、`/admin/source-sites` 在存在活跃任务时会自动刷新，并实时显示当前抓取阶段与累计统计（列表页、详情页、公告、归档、错误）
-9. 当任务长时间停留在 `pending/running` 且租约过期时，页面、查询 API、来源健康摘要和统计总览会先自动收敛为 `failed`，不再长期保留假活跃任务
-10. 当抓取过程中已记录 `fetch` 错误且列表未成功取回时，任务会按 `failed` 落库，不再误显示为 `succeeded`
-11. 同一来源若已有 `pending/running` 任务，后台会直接提示“已有进行中的抓取任务”，不会再重复创建新任务
-12. `/admin/source-sites` 与 `/admin/sources/{code}` 的手动抓取按钮会在活跃任务存在时禁用，并在提交瞬间进入防连点状态
+6. Web 进程只负责把任务 durable enqueue 到 `crawl_job(status=pending)`，不再依赖请求生命周期内的 `BackgroundTasks`
+7. 独立 scheduler/dispatcher 会扫描未领取的 `pending` 任务并派发 `worker`；派发时补齐 `picked_at / timeout_at`，worker 真正开始执行时再写入 `started_at`
+   同一 `crawl_job_id` 的 `pending -> running` 领取使用数据库原子条件更新，重复启动的后续 worker 会直接跳过
+8. 若 Web 在返回 `303` 后退出，只要数据库中的 `pending` 任务仍在，后续 dispatcher 仍可继续消费
+9. 若 dispatcher 派发失败，会记录 `crawl_job_dispatch_retry / crawl_job_dispatch_abandoned` 日志；重试耗尽后任务会显式落为 `failed`
+10. `/admin/crawl-jobs`、`/admin/crawl-jobs/{id}`、`/admin/source-sites` 在存在活跃任务时会自动刷新，并实时显示当前抓取阶段与累计统计（列表页、详情页、公告、归档、错误）
+11. `running` 任务在心跳租约过期后会被页面、查询 API、来源健康摘要和统计总览自动收敛为 `failed`；`pending` 任务则保留为可恢复消费状态，直到派发放弃
+12. 同一个 `crawl_job_id` 不支持 `running -> running` 直接接管；若执行进程超时，先收敛为 `failed`，再由人工重试或新任务继续，避免两个 worker 并行执行同一任务
+13. 当抓取过程中已记录 `fetch` 错误且列表未成功取回时，任务会按 `failed` 落库，不再误显示为 `succeeded`
+14. 同一来源若已有 `pending/running` 任务，后台会直接提示“已有进行中的抓取任务”，不会再重复创建新任务
+15. `/admin/source-sites` 与 `/admin/sources/{code}` 的手动抓取按钮会在活跃任务存在时禁用，并在提交瞬间进入防连点状态
 
 健康辅助 API：
 - `GET /sources/{code}/health`
@@ -800,7 +829,7 @@ curl -X PATCH "http://127.0.0.1:8000/settings/health-rules" \
 
 手动重试异常任务：
 1. 访问 `/admin/crawl-jobs`
-2. 对 `failed/partial` 且未重试任务点击“重试”
+2. 对 `failed/partial` 且未重试任务点击“重试”（后台会校验当前页面下发的 CSRF token）
 3. 页面会显示“重试任务已创建”，并可跳转新任务详情
 4. 重试入口只负责创建 `manual_retry` 任务；实际抓取由独立 worker 子进程执行
 5. 后台详情页与任务看板会自动轮询，直到任务从 `pending/running` 收敛为最终状态
@@ -838,6 +867,7 @@ curl -L "http://127.0.0.1:8000/reports/source-ops.xlsx?recent_hours=24&source_co
 
 说明：
 - 修改阈值后，`/admin/source-sites`、`/admin/sources/{code}`、`/sources/{code}/health` 会立即按新规则重新计算显示，无需手工改来源数据。
+- `/admin/settings/health-rules` 的保存动作同样要求有效 CSRF token，防止已登录管理员被跨站页面伪造提交。
 - 技术上应用初始化已迁移到 FastAPI `lifespan`，统一管理调度器启动/关闭。
 
 ### 6.10 Notice 检索与详情 API（第一期）
@@ -1114,8 +1144,13 @@ pytest
 ```
 
 当前包含：
-- 最小健康检查接口测试 `tests/test_health.py`
+- 健康检查接口测试（liveness/readiness）`tests/test_health.py`
 - 数据模型约束测试 `tests/test_models.py`
+- Alembic 真实迁移 smoke / 数据修复测试 `tests/test_alembic_migrations.py`
+  - 覆盖空库 `alembic upgrade head`
+  - 覆盖 `20260322_0009_add_crawl_job_leases.py`
+  - 覆盖 `20260322_0010_add_crawl_job_queue_timestamps.py`
+  - 覆盖 `20260322_0011_add_crawl_job_source_mutex.py` 以及历史重复活跃任务收敛逻辑
 - Crawler parser/pipeline/spider 基础测试 `tests/crawler/*.py`
 - 安徽样板源 parser/spider/SQLAlchemy writer 最小测试 `tests/crawler/test_anhui_ggzy_zfcg_*.py`
 - crawl_job 服务/API/管理页测试 `tests/test_crawl_job_*.py`
@@ -1132,6 +1167,11 @@ pytest
 - lifespan 启停测试 `tests/test_app_lifespan.py`
 - 演示来源初始化与闭环 smoke 测试 `tests/test_demo_bootstrap.py`
 - dashboard 页面测试 `tests/test_dashboard_admin_pages.py`
+- 后台真实浏览器 E2E 测试 `tests/test_admin_e2e_playwright.py`
+  - `/admin/source-sites` 点击“手动抓取”后的按钮禁用、页面跳转与任务状态自动刷新
+  - `/admin/sources/{code}` 修改自动抓取配置后的回跳与持久化结果
+  - `/admin/crawl-jobs` 点击“重试”后的按钮禁用、重试任务创建与列表状态联动
+  - `/admin/source-sites` 对停用来源回显手动抓取错误提示
 
 ### 7.1 测试依赖与运行约束
 
@@ -1139,6 +1179,24 @@ pytest
 - 仅测试环境可使用：`python -m pip install -e .[test]`
 - CI 必须固定安装：`python -m pip install -e .[dev]`
 - 执行 pytest 前先跑：`python scripts/check_env.py --profile test`
+- 若要单独执行后台 E2E，可使用：
+
+```bash
+source .venv/bin/activate
+python -m playwright install chromium
+pytest tests/test_admin_e2e_playwright.py -q
+```
+
+- `tests/test_alembic_migrations.py` 默认使用临时 SQLite 数据库执行真实 Alembic 升级链；这样即使本机没起 PostgreSQL，也能在 CI 里尽早发现迁移脚本断裂或数据修复逻辑回归。
+- 若要补跑 PostgreSQL 迁移路径，先启动本地开发库后执行：
+
+```bash
+docker compose up -d postgres
+TEST_POSTGRESQL_ADMIN_URL=postgresql+psycopg://postgres:postgres@localhost:5432/postgres \
+pytest tests/test_alembic_migrations.py -q
+```
+
+- 上述 PostgreSQL 路径会为每个测试创建并销毁临时数据库，不会复用 `tender_phase1` 主开发库。
 - 若要验证抓取链路或 JS 渲染来源，额外确认：
   - `scrapy` 已随基础依赖安装
   - `playwright` Python 包已安装
@@ -1149,6 +1207,7 @@ pytest
 1. 服务健康检查：
 ```bash
 curl "http://127.0.0.1:8000/healthz"
+curl "http://127.0.0.1:8000/readyz"
 ```
 2. 样板源抓取（入库模式）：
 ```bash

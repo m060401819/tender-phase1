@@ -132,7 +132,7 @@ def _seed_jobs(session_factory: sessionmaker) -> SeededAdminJobs:
     service.finish_job(partial.id)
 
     failed = service.create_job(source_code="anhui_ggzy_zfcg", job_type="manual", triggered_by="test")
-    service.start_job(failed.id, started_at=now - timedelta(hours=4))
+    service.start_job(failed.id, started_at=now - timedelta(minutes=10))
     service.record_stats(
         failed.id,
         pages_fetched=1,
@@ -141,7 +141,7 @@ def _seed_jobs(session_factory: sessionmaker) -> SeededAdminJobs:
         deduplicated_count=0,
         error_count=1,
     )
-    service.finish_job(failed.id, status="failed", finished_at=now - timedelta(hours=3, minutes=30))
+    service.finish_job(failed.id, status="failed", finished_at=now - timedelta(minutes=5))
 
     pending = service.create_job(source_code="example_source", job_type="manual", triggered_by="test")
 
@@ -191,6 +191,7 @@ def test_admin_crawl_jobs_list_page_supports_filter_and_pagination(tmp_path: Pat
         assert "实时进度" in response.text
         assert "已入队，等待启动" in response.text
         assert 'data-live-refresh="true"' in response.text
+        assert 'name="csrf_token"' in response.text
         assert f"/admin/crawl-jobs/{seeded.partial_job_id}" in response.text
         assert f"/admin/crawl-jobs/{seeded.failed_job_id}" in response.text
         assert f'action="/admin/crawl-jobs/{seeded.partial_job_id}/retry"' in response.text
@@ -277,30 +278,71 @@ def test_admin_crawl_job_detail_page_auto_refreshes_for_active_job(tmp_path: Pat
         engine.dispose()
 
 
-def test_admin_crawl_job_detail_page_stops_auto_refresh_after_expired_pending_job_reconciled(tmp_path: Path) -> None:
+def test_admin_crawl_job_detail_page_reads_structured_context_without_message_parsing(tmp_path: Path) -> None:
+    client, seeded, session_factory, _, engine = _build_client(tmp_path)
+    try:
+        with session_factory() as session:
+            job = session.get(CrawlJob, seeded.partial_job_id)
+            assert job is not None
+            job.job_params_json = {
+                "source_code": "example_source",
+                "job_type": "backfill",
+                "max_pages": 88,
+                "backfill_year": 2026,
+            }
+            job.runtime_stats_json = {
+                "run_stage": "finished",
+                "pages_scraped": 19,
+                "list_seen": 32,
+                "list_unique": 29,
+                "detail_requests": 17,
+                "dedup_skipped": 5,
+                "notices_written": 7,
+                "raw_documents_written": 9,
+                "first_publish_date_seen": "2026-03-01",
+                "last_publish_date_seen": "2026-01-15",
+            }
+            job.failure_reason = "结构化失败原因"
+            job.message = "人工摘要：这条任务失败了，但 message 不含任何可解析协议"
+            session.commit()
+
+        response = client.get(f"/admin/crawl-jobs/{seeded.partial_job_id}")
+        assert response.status_code == 200
+        assert '"backfill_year": 2026' in response.text
+        assert '"pages_scraped": 19' in response.text
+        assert "结构化失败原因" in response.text
+        assert "人工摘要：这条任务失败了" in response.text
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_admin_crawl_job_detail_page_shows_stale_pending_dispatch_feedback(tmp_path: Path) -> None:
     client, seeded, session_factory, _, engine = _build_client(tmp_path)
     try:
         with session_factory() as session:
             pending_job = session.get(CrawlJob, seeded.pending_job_id)
             assert pending_job is not None
+            pending_job.picked_at = datetime.now(timezone.utc) - timedelta(minutes=2)
             pending_job.timeout_at = datetime.now(timezone.utc) - timedelta(minutes=1)
             pending_job.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
             session.commit()
 
         follow_up = client.get(f"/admin/crawl-jobs/{seeded.pending_job_id}")
         assert follow_up.status_code == 200
-        assert 'data-live-refresh="true"' not in follow_up.text
-        assert "timeout_stage=pending" in follow_up.text
+        assert 'data-live-refresh="true"' in follow_up.text
+        assert "等待重派发" in follow_up.text
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
 
 
-def test_admin_crawl_jobs_can_retry_failed_job_and_show_result_link(tmp_path: Path) -> None:
+def test_admin_crawl_jobs_can_retry_failed_job_and_show_result_link(tmp_path: Path, admin_csrf) -> None:
     client, seeded, _, runner, engine = _build_client(tmp_path)
     try:
         retry_response = client.post(
             f"/admin/crawl-jobs/{seeded.failed_job_id}/retry",
+            data=admin_csrf(client),
             follow_redirects=False,
         )
         assert retry_response.status_code == 303

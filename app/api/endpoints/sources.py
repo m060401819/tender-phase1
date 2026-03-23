@@ -20,12 +20,12 @@ from app.repositories import SourceSiteRepository
 from app.services import (
     CrawlCommandRunner,
     CrawlJobDispatcher,
+    NoOpCrawlJobDispatcher,
     SourceActiveCrawlJobConflictError,
     SourceHealthService,
     SourceCrawlTriggerService,
     SourceSiteService,
     SubprocessCrawlCommandRunner,
-    SubprocessCrawlJobDispatcher,
     get_source_adapter,
     supports_job_type,
     sync_source_schedule,
@@ -43,7 +43,7 @@ def get_crawl_command_runner() -> CrawlCommandRunner:
 
 
 def get_crawl_job_dispatcher() -> CrawlJobDispatcher:
-    return SubprocessCrawlJobDispatcher()
+    return NoOpCrawlJobDispatcher()
 
 
 def get_source_crawl_trigger_service(

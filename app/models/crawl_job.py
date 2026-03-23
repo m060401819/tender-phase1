@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -21,7 +23,7 @@ from app.models.mixins import TimestampMixin
 
 
 class CrawlJob(TimestampMixin, Base):
-    """Crawl execution record per source site."""
+    """Single-owner crawl execution record per source site."""
 
     __tablename__ = "crawl_job"
     __table_args__ = (
@@ -86,6 +88,9 @@ class CrawlJob(TimestampMixin, Base):
     records_inserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     records_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     source_duplicates_suppressed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    job_params_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    runtime_stats_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     source_site: Mapped["SourceSite"] = relationship(back_populates="crawl_jobs")

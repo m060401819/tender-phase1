@@ -10,7 +10,8 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.core.logging import build_log_extra, configure_logging
 from app.repositories import SourceSiteRepository
-from app.services import CrawlJobService, SourceCrawlTriggerService
+from app.services.crawl_job_payloads import build_job_params_payload, build_runtime_stats_payload
+from app.services import CrawlJobService, CrawlJobStartConflictError, SourceCrawlTriggerService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,12 +60,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 crawl_job_service.fail_job_if_active(
                     args.crawl_job_id,
-                    message=_build_worker_failure_message(
+                    job_params_json=build_job_params_payload(
                         source_code=args.source_code,
                         job_type=args.job_type,
-                        crawl_job_id=args.crawl_job_id,
+                        triggered_by=triggered_by,
                         max_pages=args.max_pages,
                         backfill_year=args.backfill_year,
+                    ),
+                    runtime_stats_json=build_runtime_stats_payload(run_stage="worker_error"),
+                    failure_reason="后台执行启动失败：来源不存在或已被删除",
+                    message=_build_worker_failure_message(
+                        job_type=args.job_type,
                         failure_reason="后台执行启动失败：来源不存在或已被删除",
                     ),
                 )
@@ -83,6 +89,17 @@ def main(argv: list[str] | None = None) -> int:
             extra=build_log_extra(event="crawl_worker_finished", **log_context),
         )
         return 0
+    except CrawlJobStartConflictError as exc:
+        LOGGER.info(
+            "crawl worker skipped because job is no longer claimable",
+            extra=build_log_extra(
+                event="crawl_worker_skipped",
+                current_status=exc.current_status,
+                failure_reason=str(exc),
+                **log_context,
+            ),
+        )
+        return 0
     except Exception as exc:
         LOGGER.exception(
             "crawl worker failed",
@@ -90,12 +107,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         crawl_job_service.fail_job_if_active(
             args.crawl_job_id,
-            message=_build_worker_failure_message(
+            job_params_json=build_job_params_payload(
                 source_code=args.source_code,
                 job_type=args.job_type,
-                crawl_job_id=args.crawl_job_id,
+                triggered_by=triggered_by,
                 max_pages=args.max_pages,
                 backfill_year=args.backfill_year,
+            ),
+            runtime_stats_json=build_runtime_stats_payload(run_stage="worker_error"),
+            failure_reason=f"后台执行失败：{exc}",
+            message=_build_worker_failure_message(
+                job_type=args.job_type,
                 failure_reason=f"后台执行失败：{exc}",
             ),
         )
@@ -106,29 +128,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _build_worker_failure_message(
     *,
-    source_code: str,
     job_type: str,
-    crawl_job_id: int,
-    max_pages: int | None,
-    backfill_year: int | None,
     failure_reason: str,
 ) -> str:
-    parts = [
-        f"source_code={source_code}",
-        f"job_type={job_type}",
-        f"crawl_job_id={int(crawl_job_id)}",
-    ]
-    if max_pages is not None:
-        parts.append(f"max_pages={int(max_pages)}")
-    if backfill_year is not None:
-        parts.append(f"backfill_year={int(backfill_year)}")
-    parts.extend(
-        [
-            "run_stage=worker_error",
-            f"failure_reason={failure_reason}",
-        ]
-    )
-    return "; ".join(parts)
+    return f"{job_type} 任务执行失败：{failure_reason}"
 
 
 if __name__ == "__main__":

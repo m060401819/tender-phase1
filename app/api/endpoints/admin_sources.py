@@ -1,15 +1,13 @@
 from __future__ import annotations
-
-import logging
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.api.endpoints.stats import get_stats_overview
 from app.api.endpoints.sources import (
@@ -25,14 +23,19 @@ from app.api.schemas import (
     SourceSitePatchRequest,
     SourceSitesAdminPageViewModel,
 )
-from app.core.auth import AuthenticatedUser, UserRole, get_current_user, has_required_role, require_admin_user
-from app.core.logging import build_log_extra
+from app.core.auth import (
+    AuthenticatedUser,
+    UserRole,
+    get_current_user,
+    has_required_role,
+    render_admin_template,
+    require_admin_csrf,
+    require_admin_user,
+)
 from app.db.session import get_db
 from app.models import CrawlJob, SourceSite
 from app.repositories import SourceSiteRepository
 from app.services import (
-    CrawlCommandRunner,
-    CrawlJobService,
     SourceActiveCrawlJobConflictError,
     SourceCrawlEnqueueResult,
     SourceCrawlTriggerService,
@@ -44,12 +47,12 @@ from app.services import (
     supports_job_type,
     sync_source_schedule,
 )
+from app.services.crawl_job_payloads import read_payload_int
 from app.services.crawl_job_progress_service import ACTIVE_CRAWL_JOB_STATUSES, build_crawl_job_progress
 from app.services.crawl_job_service import reconcile_expired_jobs_in_session
 
 router = APIRouter(tags=["admin-sources"])
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
-LOGGER = logging.getLogger(__name__)
 
 _BOOL_TRUE_SET = {"1", "true", "yes", "on"}
 _BOOL_FALSE_SET = {"0", "false", "no", "off"}
@@ -157,22 +160,35 @@ def admin_product_source_sites_list(
         can_manage_sources=has_required_role(current_user.role, UserRole.admin),
     )
     context = {
-        "request": request,
         "page": page,
     }
-    return TEMPLATES.TemplateResponse(name="admin/source_sites_list.html", context=context, request=request)
+    return render_admin_template(
+        templates=TEMPLATES,
+        request=request,
+        name="admin/source_sites_list.html",
+        context=context,
+        current_user=current_user,
+    )
 
 
 @router.get("/admin/sources/new", response_class=HTMLResponse, dependencies=[Depends(require_admin_user)])
-def admin_source_create_page(request: Request) -> HTMLResponse:
+def admin_source_create_page(
+    request: Request,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> HTMLResponse:
     context = {
-        "request": request,
         "errors": [],
         "schedule_day_options": [1, 2, 3, 7],
         "form": _default_source_form_values(),
         "integrated_source_codes": list_integrated_source_codes(),
     }
-    return TEMPLATES.TemplateResponse(name="admin/source_new.html", context=context, request=request)
+    return render_admin_template(
+        templates=TEMPLATES,
+        request=request,
+        name="admin/source_new.html",
+        context=context,
+        current_user=current_user,
+    )
 
 
 @router.post("/admin/sources/new", dependencies=[Depends(require_admin_user)])
@@ -180,6 +196,8 @@ async def admin_source_create_submit(
     request: Request,
     db: Session = Depends(get_db),
     service: SourceSiteService = Depends(get_source_site_service),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    _csrf_protected: None = Depends(require_admin_csrf),
 ):
     body = (await request.body()).decode("utf-8")
     form_data = parse_qs(body)
@@ -251,16 +269,17 @@ async def admin_source_create_submit(
             errors.append(str(exc))
 
     context = {
-        "request": request,
         "errors": errors,
         "schedule_day_options": [1, 2, 3, 7],
         "form": form_values,
         "integrated_source_codes": list_integrated_source_codes(),
     }
-    return TEMPLATES.TemplateResponse(
+    return render_admin_template(
+        templates=TEMPLATES,
+        request=request,
         name="admin/source_new.html",
         context=context,
-        request=request,
+        current_user=current_user,
         status_code=400,
     )
 
@@ -271,6 +290,7 @@ def admin_source_detail(
     request: Request,
     service: SourceSiteService = Depends(get_source_site_service),
     db: Session = Depends(get_db),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HTMLResponse:
     source = service.get_source(code)
     if source is None:
@@ -283,7 +303,6 @@ def admin_source_detail(
     active_crawl = _load_active_crawl_map(session=db, source_codes=[source.code]).get(source.code)
 
     context = {
-        "request": request,
         "source": source,
         "business_code": adapter.business_code if adapter is not None else source.code,
         "crawl_supported": adapter is not None,
@@ -343,16 +362,22 @@ def admin_source_detail(
         "has_active_crawl": active_crawl is not None,
         "active_crawl": active_crawl or {},
     }
-    return TEMPLATES.TemplateResponse(name="admin/source_detail.html", context=context, request=request)
+    return render_admin_template(
+        templates=TEMPLATES,
+        request=request,
+        name="admin/source_detail.html",
+        context=context,
+        current_user=current_user,
+    )
 
 
 @router.post("/admin/sources/{code}/manual-crawl", name="admin_manual_crawl_source")
 async def admin_trigger_source_manual_crawl(
     code: str,
     request: Request,
-    background_tasks: BackgroundTasks,
     service: SourceSiteService = Depends(get_source_site_service),
     trigger_service: SourceCrawlTriggerService = Depends(get_source_crawl_trigger_service),
+    _csrf_protected: None = Depends(require_admin_csrf),
 ) -> RedirectResponse:
     source_record = service.get_source(code)
     if source_record is None:
@@ -409,11 +434,10 @@ async def admin_trigger_source_manual_crawl(
         )
 
     try:
-        created_job = trigger_service.create_manual_crawl_job(
+        result = trigger_service.queue_manual_crawl(
             source=source_model,
             max_pages=default_max_pages,
             triggered_by="admin_ui",
-            message="manual crawl requested from admin ui",
         )
     except Exception as exc:
         return RedirectResponse(
@@ -424,22 +448,10 @@ async def admin_trigger_source_manual_crawl(
             ),
             status_code=303,
         )
-
-    background_tasks.add_task(
-        _run_manual_crawl_job_background,
-        database_url=trigger_service.database_url,
-        source_code=source_model.code,
-        crawl_job_id=created_job.id,
-        max_pages=default_max_pages,
-        triggered_by="admin_ui",
-        request_id=getattr(request.state, "request_id", None),
-        command_runner=trigger_service.command_runner,
-        project_root=trigger_service.project_root,
-    )
     return RedirectResponse(
         url=_manual_crawl_success_redirect_url(
             source_code=source_model.code,
-            created_job_id=created_job.id,
+            created_job_id=result.job.id,
         ),
         status_code=303,
     )
@@ -451,6 +463,7 @@ async def admin_trigger_source_crawl_job(
     request: Request,
     service: SourceSiteService = Depends(get_source_site_service),
     trigger_service: SourceCrawlTriggerService = Depends(get_source_crawl_trigger_service),
+    _csrf_protected: None = Depends(require_admin_csrf),
 ) -> RedirectResponse:
     source_record = service.get_source(code)
     if source_record is None:
@@ -574,9 +587,10 @@ def _trigger_latest_retry_for_source(
         break
 
     if latest_retryable is not None and latest_retryable.job_type == "manual":
-        fields = _parse_message_key_values(latest_retryable.message)
-        inherited_max_pages = _as_int(fields.get("max_pages")) or int(source.default_max_pages)
-        inherited_backfill_year = _as_int(fields.get("backfill_year"))
+        inherited_max_pages = read_payload_int(latest_retryable.job_params_json, "max_pages") or int(
+            source.default_max_pages
+        )
+        inherited_backfill_year = read_payload_int(latest_retryable.job_params_json, "backfill_year")
         return trigger_service.queue_retry_crawl(
             source=source,
             retry_of_job_id=int(latest_retryable.id),
@@ -598,6 +612,7 @@ async def admin_update_source_config(
     request: Request,
     db: Session = Depends(get_db),
     service: SourceSiteService = Depends(get_source_site_service),
+    _csrf_protected: None = Depends(require_admin_csrf),
 ) -> RedirectResponse:
     if service.get_source(code) is None:
         raise HTTPException(status_code=404, detail="source not found")
@@ -650,6 +665,7 @@ async def admin_update_source_schedule(
     request: Request,
     db: Session = Depends(get_db),
     service: SourceSiteService = Depends(get_source_site_service),
+    _csrf_protected: None = Depends(require_admin_csrf),
 ) -> RedirectResponse:
     source = service.get_source(code)
     if source is None:
@@ -1188,22 +1204,6 @@ def _humanize_validation_errors(error: ValidationError) -> list[str]:
     return messages
 
 
-def _parse_message_key_values(message: str | None) -> dict[str, str]:
-    if not message:
-        return {}
-    result: dict[str, str] = {}
-    for part in message.split(";"):
-        chunk = part.strip()
-        if "=" not in chunk:
-            continue
-        key, value = chunk.split("=", maxsplit=1)
-        normalized_key = key.strip()
-        if not normalized_key:
-            continue
-        result[normalized_key] = value.strip()
-    return result
-
-
 def _as_int(value: object) -> int | None:
     if value is None:
         return None
@@ -1238,109 +1238,3 @@ def _manual_crawl_error_redirect_url(
         return f"/admin/source-sites?{query}"
     query = urlencode({"manual_crawl_error": message})
     return f"/admin/sources/{source_code}?{query}"
-
-
-def _run_manual_crawl_job_background(
-    *,
-    database_url: str,
-    source_code: str,
-    crawl_job_id: int,
-    max_pages: int,
-    triggered_by: str,
-    request_id: str | None,
-    command_runner: CrawlCommandRunner,
-    project_root: Path,
-) -> None:
-    engine = create_engine(database_url, pool_pre_ping=True)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
-    crawl_job_service = CrawlJobService(session_factory=session_factory)
-    log_context = {
-        "source_code": source_code,
-        "crawl_job_id": crawl_job_id,
-        "job_type": "manual",
-        "triggered_by": triggered_by,
-        "request_id": request_id,
-        "max_pages": max_pages,
-    }
-    LOGGER.info(
-        "manual crawl background started",
-        extra=build_log_extra(event="manual_crawl_background_started", **log_context),
-    )
-    try:
-        with session_factory() as session:
-            source = SourceSiteRepository(session).get_model_by_code(source_code)
-            if source is None:
-                LOGGER.error(
-                    "manual crawl background source missing",
-                    extra=build_log_extra(event="manual_crawl_background_source_missing", **log_context),
-                )
-                crawl_job_service.fail_job_if_active_in_session(
-                    session,
-                    job_id=crawl_job_id,
-                    message=_manual_crawl_background_failure_message(
-                        source_code=source_code,
-                        crawl_job_id=crawl_job_id,
-                        max_pages=max_pages,
-                        triggered_by=triggered_by,
-                        event="manual_crawl_background_source_missing",
-                        failure_reason="后台任务启动失败：来源不存在或已被删除",
-                    ),
-                )
-                session.commit()
-                return
-            trigger_service = SourceCrawlTriggerService(
-                session=session,
-                command_runner=command_runner,
-                project_root=project_root,
-            )
-            trigger_service.execute_manual_crawl_job(
-                source=source,
-                crawl_job_id=crawl_job_id,
-                max_pages=max_pages,
-            )
-            LOGGER.info(
-                "manual crawl background finished",
-                extra=build_log_extra(event="manual_crawl_background_finished", **log_context),
-            )
-    except Exception as exc:
-        LOGGER.exception(
-            "manual crawl background failed",
-            extra=build_log_extra(event="manual_crawl_background_failed", **log_context),
-        )
-        crawl_job_service.fail_job_if_active(
-            crawl_job_id,
-            message=_manual_crawl_background_failure_message(
-                source_code=source_code,
-                crawl_job_id=crawl_job_id,
-                max_pages=max_pages,
-                triggered_by=triggered_by,
-                event="manual_crawl_background_failed",
-                failure_reason=f"后台任务执行失败：{exc}",
-            ),
-        )
-        return
-    finally:
-        engine.dispose()
-
-
-def _manual_crawl_background_failure_message(
-    *,
-    source_code: str,
-    crawl_job_id: int,
-    max_pages: int,
-    triggered_by: str,
-    event: str,
-    failure_reason: str,
-) -> str:
-    return "; ".join(
-        [
-            f"source_code={source_code}",
-            "job_type=manual",
-            f"crawl_job_id={crawl_job_id}",
-            f"max_pages={max_pages}",
-            f"triggered_by={triggered_by}",
-            f"event={event}",
-            "background_stage=dispatch",
-            f"failure_reason={failure_reason}",
-        ]
-    )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
@@ -51,6 +51,9 @@ class CrawlJobRecord:
     records_inserted: int
     records_updated: int
     source_duplicates_suppressed: int
+    job_params_json: dict[str, Any] | None
+    runtime_stats_json: dict[str, Any] | None
+    failure_reason: str | None
     message: str | None
     recent_crawl_error_count: int | None = None
     retry_of_job_status: str | None = None
@@ -238,6 +241,9 @@ class CrawlJobRepository:
             records_inserted=int(job.records_inserted or 0),
             records_updated=int(job.records_updated or 0),
             source_duplicates_suppressed=int(job.source_duplicates_suppressed or 0),
+            job_params_json=dict(job.job_params_json) if isinstance(job.job_params_json, dict) else None,
+            runtime_stats_json=dict(job.runtime_stats_json) if isinstance(job.runtime_stats_json, dict) else None,
+            failure_reason=job.failure_reason,
             message=job.message,
             recent_crawl_error_count=recent_crawl_error_count,
         )

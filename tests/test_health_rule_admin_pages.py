@@ -30,23 +30,27 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, object]:
     return client, engine
 
 
-def test_admin_health_rules_page_show_and_update(tmp_path: Path) -> None:
+def test_admin_health_rules_page_show_and_update(tmp_path: Path, admin_csrf) -> None:
     client, engine = _build_client(tmp_path)
     try:
         page = client.get("/admin/settings/health-rules")
         assert page.status_code == 200
         assert "健康度规则配置" in page.text
         assert "recent_error_warning_threshold" in page.text
+        assert 'name="csrf_token"' in page.text
 
         update = client.post(
             "/admin/settings/health-rules",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "recent_error_warning_threshold": "2",
                 "recent_error_critical_threshold": "5",
                 "consecutive_failure_warning_threshold": "1",
                 "consecutive_failure_critical_threshold": "2",
                 "partial_warning_enabled": "false",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert update.status_code == 303
@@ -62,18 +66,21 @@ def test_admin_health_rules_page_show_and_update(tmp_path: Path) -> None:
         engine.dispose()
 
 
-def test_admin_health_rules_page_reject_invalid_values(tmp_path: Path) -> None:
+def test_admin_health_rules_page_reject_invalid_values(tmp_path: Path, admin_csrf) -> None:
     client, engine = _build_client(tmp_path)
     try:
         invalid = client.post(
             "/admin/settings/health-rules",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "recent_error_warning_threshold": "9",
                 "recent_error_critical_threshold": "5",
                 "consecutive_failure_warning_threshold": "1",
                 "consecutive_failure_critical_threshold": "1",
                 "partial_warning_enabled": "true",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert invalid.status_code == 400

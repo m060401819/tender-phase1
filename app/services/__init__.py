@@ -8,6 +8,11 @@ from app.services.crawl_job_service import (
     CrawlJobSnapshot,
 )
 from app.services.crawl_job_query_service import CrawlJobQueryService
+from app.services.crawl_job_dispatch_service import (
+    DEFAULT_PENDING_DISPATCH_LIMIT,
+    PendingCrawlJobDispatchService,
+    PendingCrawlJobDispatchSweepResult,
+)
 from app.services.notice_query_service import NoticeQueryService
 from app.services.raw_document_query_service import RawDocumentQueryService
 from app.services.crawl_error_query_service import CrawlErrorQueryService
@@ -16,9 +21,11 @@ from app.services.source_crawl_trigger_service import (
     CrawlJobRetryConflictError,
     CrawlJobRetryNotFoundError,
     CrawlJobRetryValidationError,
+    CrawlJobStartConflictError,
     CrawlJobDispatchRequest,
     CrawlJobDispatcher,
     CrawlCommandRunner,
+    NoOpCrawlJobDispatcher,
     SourceActiveCrawlJobConflictError,
     SourceCrawlEnqueueResult,
     SourceCrawlTriggerResult,
@@ -46,6 +53,7 @@ from app.services.health_rule_service import (
     HealthRuleService,
     HealthRuleSnapshot,
 )
+from app.services.health_service import ReadinessCheck, ReadinessReport, ReadinessService
 from app.services.source_site_service import SourceSiteService
 from app.services.source_ops_service import SourceOpsService, SourceOpsSummary
 from app.services.demo_bootstrap_service import DemoSourceSeed, bootstrap_demo_sources
@@ -66,6 +74,9 @@ __all__ = [
     "CrawlJobSnapshot",
     "CrawlJobService",
     "CrawlJobQueryService",
+    "DEFAULT_PENDING_DISPATCH_LIMIT",
+    "PendingCrawlJobDispatchService",
+    "PendingCrawlJobDispatchSweepResult",
     "NoticeQueryService",
     "RawDocumentQueryService",
     "CrawlErrorQueryService",
@@ -74,9 +85,11 @@ __all__ = [
     "CrawlJobRetryConflictError",
     "CrawlJobRetryNotFoundError",
     "CrawlJobRetryValidationError",
+    "CrawlJobStartConflictError",
     "CrawlJobDispatchRequest",
     "CrawlJobDispatcher",
     "CrawlCommandRunner",
+    "NoOpCrawlJobDispatcher",
     "SourceActiveCrawlJobConflictError",
     "SubprocessCrawlJobDispatcher",
     "SubprocessCrawlCommandRunner",
@@ -97,6 +110,9 @@ __all__ = [
     "DEFAULT_HEALTH_RULES",
     "HealthRuleSnapshot",
     "HealthRuleService",
+    "ReadinessCheck",
+    "ReadinessReport",
+    "ReadinessService",
     "SourceOpsSummary",
     "SourceOpsService",
     "DemoSourceSeed",

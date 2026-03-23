@@ -377,7 +377,9 @@ def test_stats_overview_reconciles_expired_running_job(tmp_path: Path) -> None:
             refreshed = session.scalar(select(CrawlJob).where(CrawlJob.id == 701))
             assert refreshed is not None
             assert refreshed.status == "failed"
-            assert "timeout_stage=running" in (refreshed.message or "")
+            assert refreshed.failure_reason == "任务心跳超时，执行进程可能已退出或卡死"
+            assert refreshed.runtime_stats_json is not None
+            assert refreshed.runtime_stats_json["timeout_stage"] == "running"
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

@@ -99,6 +99,9 @@ def get_crawl_job(job_id: int, db: Session = Depends(get_db)) -> CrawlJobDetailR
         records_inserted=job.records_inserted,
         records_updated=job.records_updated,
         source_duplicates_suppressed=job.source_duplicates_suppressed,
+        job_params_json=job.job_params_json,
+        runtime_stats_json=job.runtime_stats_json,
+        failure_reason=job.failure_reason,
         message=job.message,
         recent_crawl_error_count=job.recent_crawl_error_count,
     )
@@ -168,6 +171,9 @@ def retry_crawl_job(
             records_inserted=retry_job.records_inserted,
             records_updated=retry_job.records_updated,
             source_duplicates_suppressed=retry_job.source_duplicates_suppressed,
+            job_params_json=retry_job.job_params_json,
+            runtime_stats_json=retry_job.runtime_stats_json,
+            failure_reason=retry_job.failure_reason,
             message=retry_job.message,
         ),
     )
@@ -205,5 +211,8 @@ def _to_list_item(job) -> CrawlJobListItemResponse:  # type: ignore[no-untyped-d
         records_inserted=job.records_inserted,
         records_updated=job.records_updated,
         source_duplicates_suppressed=job.source_duplicates_suppressed,
+        job_params_json=job.job_params_json,
+        runtime_stats_json=job.runtime_stats_json,
+        failure_reason=job.failure_reason,
         message=job.message,
     )

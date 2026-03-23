@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import SourceSite
+from app.services.crawl_job_dispatch_service import PendingCrawlJobDispatchService
 from app.services.source_crawl_trigger_service import (
     CrawlCommandRunner,
     SourceActiveCrawlJobConflictError,
@@ -20,6 +21,7 @@ SCHEDULE_DAY_OPTIONS = {1, 2, 3, 7}
 SCHEDULE_STATUS_OPTIONS = {"succeeded", "failed", "partial", "skipped"}
 SOURCE_SCHEDULE_JOB_PREFIX = "source_schedule::"
 SOURCE_SCHEDULE_REFRESH_JOB_ID = "source_schedule_runtime::refresh"
+SOURCE_PENDING_DISPATCH_JOB_ID = "crawl_job_dispatch_runtime::dispatch_pending"
 
 
 @dataclass(slots=True)
@@ -41,13 +43,19 @@ class SourceScheduleRuntime:
         database_url: str,
         command_runner: CrawlCommandRunner | None = None,
         refresh_interval_seconds: int = 30,
+        dispatch_interval_seconds: int = 5,
     ) -> None:
         self._engine = create_engine(database_url, pool_pre_ping=True)
         self.session_factory = sessionmaker(bind=self._engine, autoflush=False, autocommit=False, expire_on_commit=False)
         self.command_runner = command_runner
         self.refresh_interval_seconds = max(int(refresh_interval_seconds), 1)
+        self.dispatch_interval_seconds = max(int(dispatch_interval_seconds), 1)
         self.scheduler = BackgroundScheduler(timezone=timezone.utc)
         self._started = False
+        self.pending_dispatch_service = PendingCrawlJobDispatchService(
+            session_factory=self.session_factory,
+            database_url=database_url,
+        )
 
     def start(self) -> None:
         if self._started:
@@ -56,6 +64,7 @@ class SourceScheduleRuntime:
         try:
             self.restore_from_db()
             self._register_refresh_job()
+            self._register_pending_dispatch_job()
         except Exception:
             self.scheduler.shutdown(wait=False)
             self._started = False
@@ -185,6 +194,21 @@ class SourceScheduleRuntime:
             misfire_grace_time=max(self.refresh_interval_seconds, 1),
         )
 
+    def _register_pending_dispatch_job(self) -> None:
+        self.scheduler.add_job(
+            self._dispatch_pending_crawl_jobs,
+            trigger=IntervalTrigger(seconds=self.dispatch_interval_seconds, timezone=timezone.utc),
+            id=SOURCE_PENDING_DISPATCH_JOB_ID,
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            next_run_time=datetime.now(timezone.utc),
+            misfire_grace_time=max(self.dispatch_interval_seconds, 1),
+        )
+
+    def _dispatch_pending_crawl_jobs(self) -> None:
+        self.pending_dispatch_service.dispatch_pending_jobs()
+
     def _remove_stale_source_jobs(self, active_source_codes: set[str]) -> None:
         active_job_ids = {self._job_id(source_code) for source_code in active_source_codes}
         for job in self.scheduler.get_jobs():
@@ -246,12 +270,14 @@ def initialize_source_schedule_runtime(
     database_url: str,
     *,
     refresh_interval_seconds: int = 30,
+    dispatch_interval_seconds: int = 5,
 ) -> SourceScheduleRuntime:
     global _global_source_schedule_runtime
     if _global_source_schedule_runtime is None:
         _global_source_schedule_runtime = SourceScheduleRuntime(
             database_url=database_url,
             refresh_interval_seconds=refresh_interval_seconds,
+            dispatch_interval_seconds=dispatch_interval_seconds,
         )
     return _global_source_schedule_runtime
 

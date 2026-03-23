@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -59,6 +60,9 @@ class CrawlJobBaseResponse(BaseModel):
     records_updated: int
     source_duplicates_suppressed: int
 
+    job_params_json: dict[str, Any] | None = None
+    runtime_stats_json: dict[str, Any] | None = None
+    failure_reason: str | None = None
     message: str | None
 
 

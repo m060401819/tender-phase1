@@ -191,7 +191,7 @@
         <a href="/admin/crawl-jobs?ops_filter=partial">仅看 partial</a>
       </div>
       {% if created_job_id %}
-      <div class="notice">
+      <div class="notice" data-testid="created-job-banner">
         已创建手动抓取任务 #{{ created_job_id }}
         {% if created_job %}
         ，当前状态：{{ created_job.status_label }} / {{ created_job.progress_stage_label }} / {{ created_job.progress_summary }}
@@ -200,7 +200,7 @@
       </div>
       {% endif %}
       {% if retry_created_job_id %}
-      <div class="notice">
+      <div class="notice" data-testid="retry-created-job-banner">
         重试任务已创建：#{{ retry_created_job_id }}
         {% if retry_created_job %}
         ，当前状态：{{ retry_created_job.status_label }} / {{ retry_created_job.progress_stage_label }} / {{ retry_created_job.progress_summary }}
@@ -209,7 +209,7 @@
       </div>
       {% endif %}
       {% if polling_enabled %}
-      <div class="notice live" data-live-refresh="true">
+      <div class="notice live" data-live-refresh="true" data-testid="crawl-jobs-live-refresh">
         检测到抓取任务仍在运行或排队，页面每 {{ auto_refresh_interval_seconds }} 秒自动刷新一次。
       </div>
       {% endif %}
@@ -272,11 +272,11 @@
         </thead>
         <tbody>
           {% for job in jobs %}
-          <tr {% if job.status in ['failed', 'partial'] %}style="background:#fff7ed;"{% elif job.is_active %}style="background:#eff6ff;"{% endif %}>
+          <tr {% if job.status in ['failed', 'partial'] %}style="background:#fff7ed;"{% elif job.is_active %}style="background:#eff6ff;"{% endif %} data-testid="crawl-job-row-{{ job.id }}">
             <td>{{ job.id }}</td>
             <td>{{ job.source_code }}</td>
             <td>{{ job.job_type_label }}</td>
-            <td>
+            <td data-testid="crawl-job-status-{{ job.id }}">
               <span class="status {% if job.status == 'pending' %}status-pending{% elif job.status == 'running' %}status-running{% elif job.status == 'failed' %}status-failed{% elif job.status == 'partial' %}status-partial{% endif %}">
                 {{ job.status_label }}
               </span>
@@ -295,11 +295,11 @@
             <td>{{ job.notices_upserted }}</td>
             <td>{{ job.deduplicated_count }}</td>
             <td>{{ job.error_count }}</td>
-            <td class="progress-cell">
+            <td class="progress-cell" data-testid="crawl-job-progress-{{ job.id }}">
               <div class="progress-stage">{{ job.progress_stage_label }}</div>
               <div class="muted">{{ job.progress_summary }}</div>
             </td>
-            <td>
+            <td data-testid="crawl-job-retry-state-{{ job.id }}">
               {% if job.retried_by_job_id %}
               <span class="tag tag-retried">已重试</span>
               <div>
@@ -313,11 +313,12 @@
               <span class="muted">未重试</span>
               {% endif %}
             </td>
-            <td class="actions">
+            <td class="actions" data-testid="crawl-job-actions-{{ job.id }}">
               <a href="/admin/crawl-jobs/{{ job.id }}">详情</a>
               {% if can_retry_jobs and job.status in ['failed', 'partial'] and (not job.retried_by_job_id) and (not job.retry_of_job_id) %}
-              <form method="post" action="/admin/crawl-jobs/{{ job.id }}/retry">
-                <button class="btn-inline" type="submit">重试</button>
+              <form method="post" action="/admin/crawl-jobs/{{ job.id }}/retry" data-disable-on-submit="true" data-testid="retry-job-form-{{ job.id }}">
+                {% include "admin/_csrf_input.html" %}
+                <button class="btn-inline" type="submit" data-testid="retry-job-btn-{{ job.id }}">重试</button>
               </form>
               {% elif job.retried_by_job_id %}
               <span class="muted">已重试</span>
@@ -345,6 +346,34 @@
       </div>
     </div>
   </div>
+  <script>
+    document.querySelectorAll('form[data-disable-on-submit="true"]').forEach(function (form) {
+      var button = form.querySelector('button[type="submit"]');
+      function markSubmitting() {
+        if (!button || button.disabled) {
+          return false;
+        }
+        button.disabled = true;
+        button.textContent = '提交中';
+        return true;
+      }
+      if (button) {
+        button.addEventListener('click', function (event) {
+          if (button.disabled) {
+            return;
+          }
+          event.preventDefault();
+          if (!markSubmitting()) {
+            return;
+          }
+          form.requestSubmit();
+        });
+      }
+      form.addEventListener('submit', function () {
+        markSubmitting();
+      });
+    });
+  </script>
   {% if polling_enabled %}
   <script>
     window.setTimeout(function () {

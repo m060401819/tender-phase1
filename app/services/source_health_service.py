@@ -104,6 +104,8 @@ class SourceHealthService:
             failure_reason = latest_error_reason_map.get(source_id)
             if not failure_reason:
                 failure_reason = latest_failed_job_reason_map.get(source_id)
+            if not failure_reason and latest_job is not None and latest_job.failure_reason:
+                failure_reason = latest_job.failure_reason
             if not failure_reason and latest_job is not None and latest_job.message:
                 failure_reason = latest_job.message
 
@@ -203,7 +205,7 @@ class SourceHealthService:
         result: dict[int, str] = {}
         for source_id in source_ids:
             message = self.session.scalar(
-                select(CrawlJob.message)
+                select(CrawlJob.failure_reason)
                 .where(
                     CrawlJob.source_site_id == source_id,
                     CrawlJob.status.in_(["failed", "partial"]),

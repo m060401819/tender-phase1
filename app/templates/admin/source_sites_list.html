@@ -236,13 +236,13 @@
         <a href="/admin/notices">前往 /admin/notices</a>
       </div>
       {% if page.created_source_success %}
-      <div class="alert calm">新增成功：{{ page.created_source_code }}</div>
+      <div class="alert calm" data-testid="source-created-banner">新增成功：{{ page.created_source_code }}</div>
       {% endif %}
       {% if page.manual_crawl_error %}
-      <div class="alert">来源 {{ page.manual_crawl_error_source_code or '-' }}：{{ page.manual_crawl_error }}</div>
+      <div class="alert" data-testid="manual-crawl-error-banner">来源 {{ page.manual_crawl_error_source_code or '-' }}：{{ page.manual_crawl_error }}</div>
       {% endif %}
       {% if page.active_crawl_job_count %}
-      <div class="alert live" data-live-refresh="true">
+      <div class="alert live" data-live-refresh="true" data-testid="source-sites-live-refresh">
         检测到 {{ page.active_crawl_job_count }} 个来源存在进行中的抓取任务，页面每 {{ page.auto_refresh_interval_seconds }} 秒自动刷新一次。
       </div>
       {% endif %}
@@ -275,7 +275,7 @@
           </thead>
           <tbody>
             {% for source in page.sources %}
-            <tr class="{% if source.has_active_crawl %}row-live{% elif source.health_status == 'critical' %}row-risk{% elif source.has_new_notice %}row-hot{% endif %}">
+            <tr class="{% if source.has_active_crawl %}row-live{% elif source.health_status == 'critical' %}row-risk{% elif source.has_new_notice %}row-hot{% endif %}" data-testid="source-row-{{ source.code }}">
               <td>
                 <div>{{ source.name }}</div>
                 <div class="muted">{{ source.code }}</div>
@@ -362,9 +362,10 @@
               </td>
               <td>
                 <div class="actions">
-                  <form method="post" action="{{ source.actions.manual_crawl_post_url }}" style="margin-bottom:8px;" data-disable-on-submit="true">
+                  <form method="post" action="{{ source.actions.manual_crawl_post_url }}" style="margin-bottom:8px;" data-disable-on-submit="true" data-testid="manual-crawl-form-{{ source.code }}">
+                    {% include "admin/_csrf_input.html" %}
                     <input type="hidden" name="return_to" value="source-sites" />
-                    <button type="submit" class="btn btn-success" {% if source.has_active_crawl %}disabled{% endif %}>{{ "抓取中" if source.has_active_crawl else "手动抓取" }}</button>
+                    <button type="submit" class="btn btn-success" data-testid="manual-crawl-btn-{{ source.code }}" {% if source.has_active_crawl %}disabled{% endif %}>{{ "抓取中" if source.has_active_crawl else "手动抓取" }}</button>
                   </form>
                   <a class="site-link" href="{{ source.actions.crawl_jobs_url }}">查看任务</a>
                   <a class="site-link" href="{{ source.actions.crawl_errors_url }}">查看错误</a>
@@ -387,13 +388,29 @@
   </div>
   <script>
     document.querySelectorAll('form[data-disable-on-submit="true"]').forEach(function (form) {
-      form.addEventListener('submit', function () {
-        var button = form.querySelector('button[type="submit"]');
+      var button = form.querySelector('button[type="submit"]');
+      function markSubmitting() {
         if (!button || button.disabled) {
-          return;
+          return false;
         }
         button.disabled = true;
         button.textContent = '提交中';
+        return true;
+      }
+      if (button) {
+        button.addEventListener('click', function (event) {
+          if (button.disabled) {
+            return;
+          }
+          event.preventDefault();
+          if (!markSubmitting()) {
+            return;
+          }
+          form.requestSubmit();
+        });
+      }
+      form.addEventListener('submit', function () {
+        markSubmitting();
       });
     });
   </script>

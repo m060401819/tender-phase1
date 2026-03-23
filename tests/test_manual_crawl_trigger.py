@@ -2,22 +2,30 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from threading import Event, Thread
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
-import app.api.endpoints.admin_sources as admin_sources_module
 import app.models  # noqa: F401
-from app.api.endpoints.admin_sources import _run_manual_crawl_job_background
-from app.api.endpoints.sources import get_crawl_command_runner, get_source_crawl_trigger_service
+import app.services.source_crawl_trigger_service as trigger_module
+from app.api.endpoints.sources import (
+    get_crawl_command_runner,
+    get_crawl_job_dispatcher,
+    get_source_crawl_trigger_service,
+)
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import CrawlJob, SourceSite
-from app.services import CrawlJobService
+from app.repositories import SourceSiteRepository
+from app.services import (
+    CrawlJobService,
+    PendingCrawlJobDispatchService,
+    SourceCrawlTriggerService,
+    SubprocessCrawlJobDispatcher,
+)
 from app.services.source_crawl_trigger_service import _database_url_for_bind
 
 
@@ -39,34 +47,42 @@ class StubRunner:
         return self.return_code
 
 
-class BlockingRunner(StubRunner):
-    def __init__(self, *, release_event: Event, return_code: int = 0) -> None:
-        super().__init__(return_code=return_code)
-        self.release_event = release_event
-        self.started_event = Event()
+class InlineDispatcher:
+    def __init__(self, *, session_factory: sessionmaker, runner: StubRunner) -> None:
+        self.session_factory = session_factory
+        self.runner = runner
 
-    def run(
-        self,
-        command: list[str],
-        *,
-        cwd: Path,
-        heartbeat_callback=None,
-        heartbeat_interval_seconds: int = 30,
-    ) -> int:
-        _ = (cwd, heartbeat_callback, heartbeat_interval_seconds)
-        self.commands.append(command)
-        self.started_event.set()
-        released = self.release_event.wait(timeout=5)
-        assert released, "blocking runner timed out waiting for release"
-        return self.return_code
+    def dispatch(self, request, *, project_root: Path, database_url: str) -> None:  # type: ignore[no-untyped-def]
+        _ = database_url
+        with self.session_factory() as session:
+            source = SourceSiteRepository(session).get_model_by_code(request.source_code)
+            assert source is not None
+            service = SourceCrawlTriggerService(
+                session=session,
+                command_runner=self.runner,
+                project_root=project_root,
+            )
+            service.execute_crawl_job(
+                source=source,
+                crawl_job_id=request.crawl_job_id,
+                job_type=request.job_type,
+                max_pages=request.max_pages,
+                backfill_year=request.backfill_year,
+            )
 
 
-class FailingCreateTriggerService:
+class FailingQueueTriggerService:
     def __init__(self, *, session: Session) -> None:
         self.session = session
 
-    def create_manual_crawl_job(self, **_: object) -> None:
-        raise RuntimeError("mock create failed")
+    def queue_manual_crawl(self, **_: object) -> None:
+        raise RuntimeError("mock enqueue failed")
+
+
+class DummyProcess:
+    def wait(self, timeout: int | None = None) -> int:  # pragma: no cover - defensive stub
+        _ = timeout
+        return 0
 
 
 def _next_id(session: Session, model_cls: type) -> int:
@@ -93,7 +109,13 @@ def _seed_source(session_factory: sessionmaker, *, is_active: bool) -> None:
         session.commit()
 
 
-def _build_client(tmp_path: Path, *, runner: StubRunner, is_active: bool) -> tuple[TestClient, sessionmaker, object]:
+def _build_client(
+    tmp_path: Path,
+    *,
+    runner: StubRunner,
+    is_active: bool,
+    dispatcher: object | None = None,
+) -> tuple[TestClient, sessionmaker, object, str]:
     db_url = f"sqlite+pysqlite:///{tmp_path / 'manual_crawl_trigger.db'}"
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
@@ -110,23 +132,24 @@ def _build_client(tmp_path: Path, *, runner: StubRunner, is_active: bool) -> tup
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_crawl_command_runner] = lambda: runner
+    if dispatcher is not None:
+        app.dependency_overrides[get_crawl_job_dispatcher] = lambda: dispatcher
 
     client = TestClient(app)
-    return client, session_factory, engine
+    return client, session_factory, engine, db_url
 
 
-def test_manual_crawl_route_creates_new_manual_job_and_redirects(tmp_path: Path) -> None:
+def test_manual_crawl_route_creates_pending_manual_job_and_redirects(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
-    client, session_factory, engine = _build_client(tmp_path, runner=runner, is_active=True)
+    client, session_factory, engine, _ = _build_client(tmp_path, runner=runner, is_active=True)
     try:
         response = client.post(
             "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
+            data=admin_csrf(client),
             follow_redirects=False,
         )
         assert response.status_code == 303
-        location = response.headers.get("location")
-        assert location is not None
-        assert location == "/admin/crawl-jobs?source_code=anhui_ggzy_zfcg&created_job_id=1"
+        assert response.headers.get("location") == "/admin/crawl-jobs?source_code=anhui_ggzy_zfcg&created_job_id=1"
 
         with session_factory() as session:
             source = session.scalar(select(SourceSite).where(SourceSite.code == "anhui_ggzy_zfcg"))
@@ -136,14 +159,14 @@ def test_manual_crawl_route_creates_new_manual_job_and_redirects(tmp_path: Path)
             created = jobs[0]
             assert created.source_site_id == source.id
             assert created.job_type == "manual"
+            assert created.status == "pending"
             assert created.triggered_by == "admin_ui"
             assert created.retry_of_job_id is None
+            assert created.picked_at is None
+            assert created.started_at is None
+            assert created.timeout_at is None
 
-        assert len(runner.commands) == 1
-        command_text = " ".join(runner.commands[0])
-        assert "job_type=manual" in command_text
-        assert "max_pages=7" in command_text
-
+        assert runner.commands == []
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
@@ -151,11 +174,12 @@ def test_manual_crawl_route_creates_new_manual_job_and_redirects(tmp_path: Path)
 
 def test_source_sites_page_contains_manual_crawl_button(tmp_path: Path) -> None:
     runner = StubRunner(return_code=0)
-    client, _, engine = _build_client(tmp_path, runner=runner, is_active=True)
+    client, _, engine, _ = _build_client(tmp_path, runner=runner, is_active=True)
     try:
         response = client.get("/admin/source-sites")
         assert response.status_code == 200
         assert "手动抓取" in response.text
+        assert 'name="csrf_token"' in response.text
         assert 'action="/admin/sources/anhui_ggzy_zfcg/manual-crawl"' in response.text
         assert 'name="return_to" value="source-sites"' in response.text
         assert 'href="/admin/sources/anhui_ggzy_zfcg/manual-crawl"' not in response.text
@@ -166,7 +190,7 @@ def test_source_sites_page_contains_manual_crawl_button(tmp_path: Path) -> None:
 
 def test_manual_crawl_route_is_post_only(tmp_path: Path) -> None:
     runner = StubRunner(return_code=0)
-    client, _, engine = _build_client(tmp_path, runner=runner, is_active=True)
+    client, _, engine, _ = _build_client(tmp_path, runner=runner, is_active=True)
     try:
         response = client.get("/admin/sources/anhui_ggzy_zfcg/manual-crawl")
         assert response.status_code == 405
@@ -175,13 +199,13 @@ def test_manual_crawl_route_is_post_only(tmp_path: Path) -> None:
         engine.dispose()
 
 
-def test_manual_crawl_route_rejects_inactive_source_with_page_message(tmp_path: Path) -> None:
+def test_manual_crawl_route_rejects_inactive_source_with_page_message(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
-    client, session_factory, engine = _build_client(tmp_path, runner=runner, is_active=False)
+    client, session_factory, engine, _ = _build_client(tmp_path, runner=runner, is_active=False)
     try:
         response = client.post(
             "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
-            data={"return_to": "source-sites"},
+            data=admin_csrf(client, data={"return_to": "source-sites"}),
             follow_redirects=True,
         )
         assert response.status_code == 200
@@ -192,43 +216,43 @@ def test_manual_crawl_route_rejects_inactive_source_with_page_message(tmp_path: 
             jobs = session.scalars(select(CrawlJob)).all()
             assert jobs == []
 
-        assert len(runner.commands) == 0
+        assert runner.commands == []
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
 
 
-def test_manual_crawl_route_shows_create_failure_message_on_source_sites_page(tmp_path: Path) -> None:
+def test_manual_crawl_route_shows_enqueue_failure_message_on_source_sites_page(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
-    client, session_factory, engine = _build_client(tmp_path, runner=runner, is_active=True)
+    client, session_factory, engine, _ = _build_client(tmp_path, runner=runner, is_active=True)
     failing_session = session_factory()
     app.dependency_overrides[get_source_crawl_trigger_service] = (
-        lambda: FailingCreateTriggerService(session=failing_session)
+        lambda: FailingQueueTriggerService(session=failing_session)
     )
     try:
         response = client.post(
             "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
-            data={"return_to": "source-sites"},
+            data=admin_csrf(client, data={"return_to": "source-sites"}),
             follow_redirects=True,
         )
         assert response.status_code == 200
-        assert "手动抓取任务创建失败：mock create failed" in response.text
+        assert "手动抓取任务创建失败：mock enqueue failed" in response.text
         assert "来源网站列表" in response.text
 
         with session_factory() as session:
             jobs = session.scalars(select(CrawlJob)).all()
             assert jobs == []
 
-        assert len(runner.commands) == 0
+        assert runner.commands == []
     finally:
         failing_session.close()
         app.dependency_overrides.clear()
         engine.dispose()
 
 
-def test_manual_crawl_route_rejects_when_same_source_already_has_active_job(tmp_path: Path) -> None:
+def test_manual_crawl_route_rejects_when_same_source_already_has_active_job(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
-    client, session_factory, engine = _build_client(tmp_path, runner=runner, is_active=True)
+    client, session_factory, engine, _ = _build_client(tmp_path, runner=runner, is_active=True)
     service = CrawlJobService(session_factory=session_factory)
     try:
         active_job = service.create_job(
@@ -236,11 +260,10 @@ def test_manual_crawl_route_rejects_when_same_source_already_has_active_job(tmp_
             job_type="manual",
             triggered_by="pytest-active",
         )
-        service.start_job(active_job.id)
 
         response = client.post(
             "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
-            data={"return_to": "source-sites"},
+            data=admin_csrf(client, data={"return_to": "source-sites"}),
             follow_redirects=True,
         )
         assert response.status_code == 200
@@ -250,76 +273,42 @@ def test_manual_crawl_route_rejects_when_same_source_already_has_active_job(tmp_
             jobs = session.scalars(select(CrawlJob).order_by(CrawlJob.id.asc())).all()
             assert len(jobs) == 1
             assert jobs[0].id == active_job.id
-            assert jobs[0].status == "running"
+            assert jobs[0].status == "pending"
 
-        assert len(runner.commands) == 0
+        assert runner.commands == []
     finally:
+        service.close()
         app.dependency_overrides.clear()
         engine.dispose()
 
 
-def test_manual_crawl_route_rejects_double_submit_while_first_background_job_running(tmp_path: Path) -> None:
-    release_event = Event()
-    runner = BlockingRunner(release_event=release_event, return_code=0)
-    client, session_factory, engine = _build_client(tmp_path, runner=runner, is_active=True)
-    secondary_client = TestClient(app)
+def test_manual_crawl_route_rejects_second_submit_while_first_job_still_pending(tmp_path: Path, admin_csrf) -> None:
+    runner = StubRunner(return_code=0)
+    client, session_factory, engine, _ = _build_client(tmp_path, runner=runner, is_active=True)
     try:
-        first_response: dict[str, object] = {}
-
-        def _send_first_request() -> None:
-            try:
-                first_response["value"] = client.post(
-                    "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
-                    data={"return_to": "source-sites"},
-                    follow_redirects=False,
-                )
-            except Exception as exc:  # pragma: no cover - diagnostic guard for thread failure
-                first_response["error"] = exc
-
-        worker = Thread(target=_send_first_request)
-        worker.start()
-        assert runner.started_event.wait(timeout=5)
-
-        with session_factory() as session:
-            active_jobs = session.scalars(
-                select(CrawlJob).where(CrawlJob.status.in_(["pending", "running"]))
-            ).all()
-            assert len(active_jobs) == 1
-            assert active_jobs[0].status == "running"
-
-        second_response = secondary_client.post(
+        first = client.post(
             "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
-            data={"return_to": "source-sites"},
+            data=admin_csrf(client, data={"return_to": "source-sites"}),
+            follow_redirects=False,
+        )
+        assert first.status_code == 303
+
+        second = client.post(
+            "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
+            data=admin_csrf(client, data={"return_to": "source-sites"}),
             follow_redirects=True,
         )
-        assert second_response.status_code == 200
-        assert "已有进行中的抓取任务" in second_response.text
+        assert second.status_code == 200
+        assert "已有进行中的抓取任务" in second.text
 
         with session_factory() as session:
             jobs = session.scalars(select(CrawlJob).order_by(CrawlJob.id.asc())).all()
             assert len(jobs) == 1
-            assert jobs[0].status == "running"
-
-        assert len(runner.commands) == 1
-
-        release_event.set()
-        worker.join(timeout=5)
-        assert not worker.is_alive()
-        assert "error" not in first_response
-
-        first = first_response.get("value")
-        assert first is not None
-        assert first.status_code == 303
-        assert first.headers.get("location") == "/admin/crawl-jobs?source_code=anhui_ggzy_zfcg&created_job_id=1"
-
-        with session_factory() as session:
-            jobs = session.scalars(select(CrawlJob).order_by(CrawlJob.id.asc())).all()
-            assert len(jobs) == 1
-            assert jobs[0].status == "succeeded"
+            assert jobs[0].status == "pending"
             assert jobs[0].triggered_by == "admin_ui"
+
+        assert runner.commands == []
     finally:
-        release_event.set()
-        secondary_client.close()
         app.dependency_overrides.clear()
         engine.dispose()
 
@@ -331,94 +320,149 @@ def test_database_url_for_bind_keeps_database_password() -> None:
     assert _database_url_for_bind(DummyBind()) == "postgresql+psycopg://postgres:postgres@localhost:5432/tender_phase1"
 
 
-def test_manual_crawl_background_marks_job_failed_when_source_missing(tmp_path: Path) -> None:
+def test_pending_manual_job_can_be_consumed_after_request_process_returns(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
-    _, session_factory, engine = _build_client(tmp_path, runner=runner, is_active=True)
-    service = CrawlJobService(session_factory=session_factory)
+    client, session_factory, engine, db_url = _build_client(tmp_path, runner=runner, is_active=True)
     try:
-        created = service.create_job(
-            source_code="anhui_ggzy_zfcg",
-            job_type="manual",
-            triggered_by="admin_ui",
-            message="manual crawl requested from admin ui",
+        response = client.post(
+            "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
+            data=admin_csrf(client),
+            follow_redirects=False,
         )
+        assert response.status_code == 303
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
 
-        _run_manual_crawl_job_background(
-            database_url=f"sqlite+pysqlite:///{tmp_path / 'manual_crawl_trigger.db'}",
-            source_code="missing_source",
-            crawl_job_id=created.id,
-            max_pages=7,
-            triggered_by="admin_ui",
-            request_id="req-missing-source",
-            command_runner=runner,
-            project_root=tmp_path,
-        )
+    dispatch_service = PendingCrawlJobDispatchService.from_database_url(
+        db_url,
+        job_dispatcher=InlineDispatcher(session_factory=session_factory, runner=runner),
+        project_root=tmp_path,
+    )
+    try:
+        sweep_result = dispatch_service.dispatch_pending_jobs()
+        assert sweep_result.scanned_count == 1
+        assert sweep_result.handoff_count == 1
+        assert runner.commands
 
         with session_factory() as session:
-            job = session.get(CrawlJob, created.id)
+            job = session.get(CrawlJob, 1)
             assert job is not None
-            assert job.status == "failed"
-            assert "triggered_by=admin_ui" in (job.message or "")
-            assert "event=manual_crawl_background_source_missing" in (job.message or "")
-            assert "failure_reason=后台任务启动失败：来源不存在或已被删除" in (job.message or "")
+            assert job.status == "succeeded"
+            assert job.picked_at is not None
+            assert job.started_at is not None
     finally:
-        service.close()
+        dispatch_service.close()
+        engine.dispose()
+
+
+def test_pending_dispatcher_retries_then_marks_job_as_dispatched_for_admin_feedback(
+    tmp_path: Path,
+    admin_csrf,
+    monkeypatch,
+    caplog,
+) -> None:
+    runner = StubRunner(return_code=0)
+    client, session_factory, engine, db_url = _build_client(tmp_path, runner=runner, is_active=True)
+    dispatcher = SubprocessCrawlJobDispatcher(max_dispatch_attempts=2, retry_delay_seconds=0)
+    attempts = {"count": 0}
+
+    def fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = (args, kwargs)
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise OSError("spawn once")
+        return DummyProcess()
+
+    monkeypatch.setattr(trigger_module.subprocess, "Popen", fake_popen)
+    try:
+        response = client.post(
+            "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
+            data=admin_csrf(client),
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        dispatch_service = PendingCrawlJobDispatchService.from_database_url(
+            db_url,
+            job_dispatcher=dispatcher,
+            project_root=tmp_path,
+        )
+        try:
+            with caplog.at_level(logging.INFO):
+                dispatch_service.dispatch_pending_jobs()
+        finally:
+            dispatch_service.close()
+
+        assert any(getattr(record, "event", "") == "crawl_job_dispatch_retry" for record in caplog.records)
+        assert any(getattr(record, "event", "") == "crawl_job_dispatched" for record in caplog.records)
+
+        with session_factory() as session:
+            job = session.get(CrawlJob, 1)
+            assert job is not None
+            assert job.status == "pending"
+            assert job.picked_at is not None
+            assert job.started_at is None
+            assert job.timeout_at is not None
+
+        detail = client.get("/admin/crawl-jobs/1")
+        assert detail.status_code == 200
+        assert "等待 Worker 启动" in detail.text
+        assert 'data-live-refresh="true"' in detail.text
+    finally:
         app.dependency_overrides.clear()
         engine.dispose()
 
 
-def test_manual_crawl_background_logs_structured_failure_context(tmp_path: Path, monkeypatch, caplog) -> None:
+def test_pending_dispatcher_abandons_failed_handoff_and_marks_job_failed(
+    tmp_path: Path,
+    admin_csrf,
+    monkeypatch,
+    caplog,
+) -> None:
     runner = StubRunner(return_code=0)
-    _, session_factory, engine = _build_client(tmp_path, runner=runner, is_active=True)
-    service = CrawlJobService(session_factory=session_factory)
+    client, session_factory, engine, db_url = _build_client(tmp_path, runner=runner, is_active=True)
+    dispatcher = SubprocessCrawlJobDispatcher(max_dispatch_attempts=2, retry_delay_seconds=0)
 
-    def fake_execute_manual_crawl_job(self, *, source, crawl_job_id: int, max_pages: int | None) -> None:
-        _ = (self, source, crawl_job_id, max_pages)
-        raise RuntimeError("background boom")
+    def always_fail_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = (args, kwargs)
+        raise OSError("spawn boom")
 
-    monkeypatch.setattr(
-        admin_sources_module.SourceCrawlTriggerService,
-        "execute_manual_crawl_job",
-        fake_execute_manual_crawl_job,
-    )
-
+    monkeypatch.setattr(trigger_module.subprocess, "Popen", always_fail_popen)
     try:
-        created = service.create_job(
-            source_code="anhui_ggzy_zfcg",
-            job_type="manual",
-            triggered_by="admin_ui",
-            message="manual crawl requested from admin ui",
+        response = client.post(
+            "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
+            data=admin_csrf(client),
+            follow_redirects=False,
         )
+        assert response.status_code == 303
 
-        with caplog.at_level(logging.INFO):
-            _run_manual_crawl_job_background(
-                database_url=f"sqlite+pysqlite:///{tmp_path / 'manual_crawl_trigger.db'}",
-                source_code="anhui_ggzy_zfcg",
-                crawl_job_id=created.id,
-                max_pages=7,
-                triggered_by="admin_ui",
-                request_id="req-background-001",
-                command_runner=runner,
-                project_root=tmp_path,
-            )
-
-        failure_log = next(
-            record for record in caplog.records if getattr(record, "event", "") == "manual_crawl_background_failed"
+        dispatch_service = PendingCrawlJobDispatchService.from_database_url(
+            db_url,
+            job_dispatcher=dispatcher,
+            project_root=tmp_path,
         )
-        assert failure_log.levelno == logging.ERROR
-        assert failure_log.source_code == "anhui_ggzy_zfcg"
-        assert failure_log.crawl_job_id == created.id
-        assert failure_log.job_type == "manual"
-        assert failure_log.triggered_by == "admin_ui"
-        assert failure_log.request_id == "req-background-001"
+        try:
+            with caplog.at_level(logging.WARNING):
+                dispatch_service.dispatch_pending_jobs()
+        finally:
+            dispatch_service.close()
+
+        assert any(getattr(record, "event", "") == "crawl_job_dispatch_retry" for record in caplog.records)
+        assert any(getattr(record, "event", "") == "crawl_job_dispatch_abandoned" for record in caplog.records)
 
         with session_factory() as session:
-            job = session.get(CrawlJob, created.id)
+            job = session.get(CrawlJob, 1)
             assert job is not None
             assert job.status == "failed"
-            assert "event=manual_crawl_background_failed" in (job.message or "")
-            assert "failure_reason=后台任务执行失败：background boom" in (job.message or "")
+            assert job.failure_reason == "后台任务派发失败：spawn boom"
+            assert job.runtime_stats_json is not None
+            assert job.runtime_stats_json["run_stage"] == "dispatch_abandoned"
+            assert "任务派发失败" in (job.message or "")
+
+        detail = client.get("/admin/crawl-jobs/1")
+        assert detail.status_code == 200
+        assert "失败" in detail.text
     finally:
-        service.close()
         app.dependency_overrides.clear()
         engine.dispose()

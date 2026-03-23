@@ -118,6 +118,7 @@
         4. 其余情况下，最近任务成功 -> 正常，否则 -> 警告。
       </div>
       <form method="post" action="/admin/settings/health-rules">
+        {% include "admin/_csrf_input.html" %}
         <div class="field">
           <label for="recent_error_warning_threshold">recent_error_warning_threshold</label>
           <input id="recent_error_warning_threshold" name="recent_error_warning_threshold" type="number" min="0" value="{{ rules.recent_error_warning_threshold }}" />

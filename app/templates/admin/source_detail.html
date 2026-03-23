@@ -167,10 +167,10 @@
     {% set breadcrumb_items = [{"label": "首页", "url": "/admin/home"}, {"label": "来源网站列表", "url": "/admin/source-sites"}, {"label": "来源详情", "url": None}] %}
     {% include "admin/_breadcrumbs.html" %}
     {% if manual_crawl_error %}
-    <div class="notice error">{{ manual_crawl_error }}</div>
+    <div class="notice error" data-testid="source-detail-manual-crawl-error">{{ manual_crawl_error }}</div>
     {% endif %}
     {% if has_active_crawl %}
-    <div class="notice">
+    <div class="notice" data-testid="source-detail-active-crawl-notice">
       当前已有进行中的抓取任务
       <a href="{{ active_crawl.detail_url | default('/admin/crawl-jobs?source_code=' ~ source.code) }}">#{{ active_crawl.id | default('-') }}</a>
       ，请等待结束后再试。
@@ -186,8 +186,9 @@
           <a class="head-link" href="/admin/settings/health-rules">健康规则</a>
           <a class="head-link" href="/reports/source-ops.xlsx?recent_hours=24&source_code={{ source.code }}">导出运营日报</a>
           {% if crawl_supported %}
-          <form method="post" action="/admin/sources/{{ source.code }}/manual-crawl" data-disable-on-submit="true">
-            <button class="head-btn-primary" type="submit" {% if has_active_crawl %}disabled{% endif %}>{{ "抓取中" if has_active_crawl else "立即手动抓取" }}</button>
+          <form method="post" action="/admin/sources/{{ source.code }}/manual-crawl" data-disable-on-submit="true" data-testid="source-detail-manual-crawl-form">
+            {% include "admin/_csrf_input.html" %}
+            <button class="head-btn-primary" type="submit" data-testid="source-detail-manual-crawl-btn" {% if has_active_crawl %}disabled{% endif %}>{{ "抓取中" if has_active_crawl else "立即手动抓取" }}</button>
           </form>
           {% endif %}
         </div>
@@ -281,7 +282,8 @@
       <div class="head">
         <h1>编辑来源配置</h1>
       </div>
-      <form class="form" method="post" action="/admin/sources/{{ source.code }}/config">
+      <form class="form" method="post" action="/admin/sources/{{ source.code }}/config" data-testid="source-config-form">
+        {% include "admin/_csrf_input.html" %}
         <div class="form-grid">
           <div class="field">
             <label for="source_name">source_name</label>
@@ -322,7 +324,7 @@
             <input id="default_max_pages" name="default_max_pages" type="number" min="1" value="{{ source.default_max_pages }}" />
           </div>
         </div>
-        <button type="submit">保存来源配置</button>
+        <button type="submit" data-testid="source-config-submit">保存来源配置</button>
         <div class="hint">保存后会返回当前来源详情页，并展示最新配置值。</div>
       </form>
     </div>
@@ -331,9 +333,10 @@
       <div class="head">
         <h1>自动抓取配置</h1>
       </div>
-      <form class="form" method="post" action="/admin/sources/{{ source.code }}/schedule">
+      <form class="form" method="post" action="/admin/sources/{{ source.code }}/schedule" data-testid="source-schedule-form">
+        {% include "admin/_csrf_input.html" %}
         {% if schedule_updated %}
-        <div class="notice">配置已更新</div>
+        <div class="notice" data-testid="source-schedule-updated-banner">配置已更新</div>
         {% endif %}
         <div class="form-grid">
           <div class="field">
@@ -352,7 +355,7 @@
             </select>
           </div>
         </div>
-        <button type="submit">保存自动抓取配置</button>
+        <button type="submit" data-testid="source-schedule-submit">保存自动抓取配置</button>
         <div class="hint">保存后会立即同步调度计划；若来源停用或未启用自动抓取，则不会创建调度任务。</div>
         <div class="hint">当前调度摘要：{{ '已启用' if source.schedule_enabled else '未启用' }} / {{ schedule_days_label }} / 下次：{{ source.next_scheduled_run_at or '-' }} / 上次结果：{{ source.last_schedule_status or '-' }}</div>
       </form>
@@ -363,12 +366,13 @@
         <h1>手动触发抓取</h1>
       </div>
       {% if crawl_supported %}
-      <form class="form" method="post" action="/admin/sources/{{ source.code }}/crawl-jobs" data-disable-on-submit="true">
+      <form class="form" method="post" action="/admin/sources/{{ source.code }}/crawl-jobs" data-disable-on-submit="true" data-testid="source-manual-job-form">
+        {% include "admin/_csrf_input.html" %}
         <input type="hidden" name="job_type" value="manual" />
         <label for="max_pages">max_pages</label>
         <input id="max_pages" name="max_pages" type="number" min="1" value="{{ source.default_max_pages }}" />
-        <button type="submit" {% if has_active_crawl %}disabled{% endif %}>{{ "抓取中" if has_active_crawl else "触发一次抓取" }}</button>
-        <div class="hint">提交后将同步触发 spider，完成后跳转到对应 crawl_job 详情页。</div>
+        <button type="submit" data-testid="source-manual-job-submit" {% if has_active_crawl %}disabled{% endif %}>{{ "抓取中" if has_active_crawl else "触发一次抓取" }}</button>
+        <div class="hint">提交后会先创建持久化 `pending` 任务，再由独立 dispatcher/worker 异步消费；页面会跳转到对应 crawl_job 详情页。</div>
         {% if has_active_crawl %}
         <div class="hint">当前活跃任务：<a href="{{ active_crawl.detail_url | default('/admin/crawl-jobs?source_code=' ~ source.code) }}">#{{ active_crawl.id | default('-') }}</a> / {{ active_crawl.stage_label | default('抓取中') }}</div>
         {% endif %}
@@ -385,13 +389,14 @@
       <div class="head">
         <h1>按年份回填</h1>
       </div>
-      <form class="form" method="post" action="/admin/sources/{{ source.code }}/crawl-jobs" data-disable-on-submit="true">
+      <form class="form" method="post" action="/admin/sources/{{ source.code }}/crawl-jobs" data-disable-on-submit="true" data-testid="source-backfill-job-form">
+        {% include "admin/_csrf_input.html" %}
         <input type="hidden" name="job_type" value="backfill" />
         <label for="backfill_year">backfill_year</label>
         <input id="backfill_year" name="backfill_year" type="number" min="2000" max="2100" value="2026" />
         <label for="backfill_max_pages">max_pages</label>
         <input id="backfill_max_pages" name="max_pages" type="number" min="1" value="50" />
-        <button type="submit" {% if has_active_crawl %}disabled{% endif %}>{{ "抓取中" if has_active_crawl else "2026回填" }}</button>
+        <button type="submit" data-testid="source-backfill-job-submit" {% if has_active_crawl %}disabled{% endif %}>{{ "抓取中" if has_active_crawl else "2026回填" }}</button>
         <div class="hint">来源详情页点击“2026回填”将创建 backfill 任务并携带 backfill_year=2026。</div>
       </form>
     </div>
@@ -399,13 +404,29 @@
   </div>
   <script>
     document.querySelectorAll('form[data-disable-on-submit="true"]').forEach(function (form) {
-      form.addEventListener('submit', function () {
-        var button = form.querySelector('button[type="submit"]');
+      var button = form.querySelector('button[type="submit"]');
+      function markSubmitting() {
         if (!button || button.disabled) {
-          return;
+          return false;
         }
         button.disabled = true;
         button.textContent = '提交中';
+        return true;
+      }
+      if (button) {
+        button.addEventListener('click', function (event) {
+          if (button.disabled) {
+            return;
+          }
+          event.preventDefault();
+          if (!markSubmitting()) {
+            return;
+          }
+          form.requestSubmit();
+        });
+      }
+      form.addEventListener('submit', function () {
+        markSubmitting();
       });
     });
   </script>

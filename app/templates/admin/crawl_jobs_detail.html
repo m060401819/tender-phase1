@@ -139,19 +139,19 @@
         </div>
       </div>
       {% if created_job_id %}
-      <div class="notice">已创建手动抓取任务 #{{ created_job_id }}</div>
+      <div class="notice" data-testid="crawl-job-created-banner">已创建手动抓取任务 #{{ created_job_id }}</div>
       {% endif %}
       {% if job.is_active %}
-      <div class="notice live" data-live-refresh="true">
+      <div class="notice live" data-live-refresh="true" data-testid="crawl-job-detail-live-refresh">
         当前任务仍在执行，页面每 {{ auto_refresh_interval_seconds }} 秒自动刷新一次。
       </div>
       {% endif %}
       {% if job.is_stale %}
       <div class="notice">
-        当前任务租约已过期，系统已停止将其视为活跃任务，请检查后台执行链路并按需重试。
+        当前任务租约已过期，请检查 dispatcher / worker 执行链路；系统会继续尝试恢复或等待人工处理。
       </div>
       {% endif %}
-      <div class="live-panel">
+      <div class="live-panel" data-testid="crawl-job-detail-progress-panel">
         <span class="tag">实时抓取进度</span><br />
         当前状态：{{ job.status_label }}<br />
         当前阶段：{{ job.progress_stage_label }}<br />
@@ -176,7 +176,9 @@
         <div class="row"><span class="k">heartbeat_at</span><span class="v">{{ job.heartbeat_at }}</span></div>
         <div class="row"><span class="k">timeout_at</span><span class="v">{{ job.timeout_at }}</span></div>
         <div class="row"><span class="k">lease_expires_at</span><span class="v">{{ job.lease_expires_at }}</span></div>
+        <div class="row"><span class="k">max_pages</span><span class="v">{{ job.max_pages or '-' }}</span></div>
         <div class="row"><span class="k">backfill_year</span><span class="v">{{ job.backfill_year or '-' }}</span></div>
+        <div class="row"><span class="k">run_stage</span><span class="v">{{ job.run_stage or '-' }}</span></div>
         <div class="row"><span class="k">pages_scraped</span><span class="v">{{ job.pages_scraped }}</span></div>
         <div class="row"><span class="k">pages_fetched</span><span class="v">{{ job.pages_fetched }}</span></div>
         <div class="row"><span class="k">list_seen</span><span class="v">{{ job.list_seen }}</span></div>
@@ -198,6 +200,8 @@
         <div class="row"><span class="k">first_publish_date_seen</span><span class="v">{{ job.first_publish_date_seen or '-' }}</span></div>
         <div class="row"><span class="k">last_publish_date_seen</span><span class="v">{{ job.last_publish_date_seen or '-' }}</span></div>
         <div class="row"><span class="k">failure_reason</span><span class="v">{{ job.failure_reason or '-' }}</span></div>
+        <div class="row"><span class="k">job_params_json</span><span class="v">{{ job.job_params_json or '-' }}</span></div>
+        <div class="row"><span class="k">runtime_stats_json</span><span class="v">{{ job.runtime_stats_json or '-' }}</span></div>
         <div class="row"><span class="k">error_count</span><span class="v">{{ job.error_count }}</span></div>
         <div class="row"><span class="k">message</span><span class="v">{{ job.message or '-' }}</span></div>
       </div>
@@ -216,8 +220,8 @@
         {% endif %}
       </div>
       {% if can_retry %}
-      <form class="form" method="post" action="/admin/crawl-jobs/{{ job.id }}/retry">
-        <button class="btn" type="submit">重试该异常任务（仅一次）</button>
+      <form class="form" method="post" action="/admin/crawl-jobs/{{ job.id }}/retry" data-disable-on-submit="true" data-testid="crawl-job-detail-retry-form">
+        <button class="btn" type="submit" data-testid="crawl-job-detail-retry-btn">重试该异常任务（仅一次）</button>
       </form>
       {% endif %}
     </div>
@@ -229,6 +233,34 @@
       <pre class="mono" id="raw-json">{{ raw_json | safe }}</pre>
     </div>
   </div>
+  <script>
+    document.querySelectorAll('form[data-disable-on-submit="true"]').forEach(function (form) {
+      var button = form.querySelector('button[type="submit"]');
+      function markSubmitting() {
+        if (!button || button.disabled) {
+          return false;
+        }
+        button.disabled = true;
+        button.textContent = '提交中';
+        return true;
+      }
+      if (button) {
+        button.addEventListener('click', function (event) {
+          if (button.disabled) {
+            return;
+          }
+          event.preventDefault();
+          if (!markSubmitting()) {
+            return;
+          }
+          form.requestSubmit();
+        });
+      }
+      form.addEventListener('submit', function () {
+        markSubmitting();
+      });
+    });
+  </script>
   {% if job.is_active %}
   <script>
     window.setTimeout(function () {

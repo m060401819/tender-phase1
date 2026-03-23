@@ -247,14 +247,14 @@ def upgrade() -> None:
     op.create_index("ix_crawl_error_job", "crawl_error", ["crawl_job_id"], unique=False)
     op.create_index("ix_crawl_error_raw_document", "crawl_error", ["raw_document_id"], unique=False)
 
-    op.create_foreign_key(
-        "fk_tender_notice_current_version_id",
-        "tender_notice",
-        "notice_version",
-        ["current_version_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    with op.batch_alter_table("tender_notice") as batch_op:
+        batch_op.create_foreign_key(
+            "fk_tender_notice_current_version_id",
+            "notice_version",
+            ["current_version_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:

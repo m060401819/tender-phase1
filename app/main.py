@@ -4,8 +4,10 @@ from contextlib import asynccontextmanager
 import logging
 
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 
 from app.api.router import api_router
+from app.core.auth import CsrfValidationError, build_admin_csrf_error_response
 from app.core.config import Settings, settings
 from app.core.logging import REQUEST_ID_HEADER, build_log_extra, configure_logging, reset_request_id, set_request_id
 from app.services import initialize_source_schedule_runtime, shutdown_source_schedule_runtime
@@ -65,6 +67,21 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 shutdown_source_schedule_runtime()
 
     app = FastAPI(title=runtime_settings.app_name, lifespan=_app_lifespan)
+
+    @app.exception_handler(CsrfValidationError)
+    async def _handle_csrf_validation_error(request: Request, exc: CsrfValidationError) -> HTMLResponse:
+        auth_user = getattr(request.state, "auth_user", None)
+        LOGGER.warning(
+            "admin csrf validation failed",
+            extra=build_log_extra(
+                event="csrf_validation_failed",
+                request_id=getattr(request.state, "request_id", None),
+                path=request.url.path,
+                method=request.method,
+                username=getattr(auth_user, "username", None),
+            ),
+        )
+        return build_admin_csrf_error_response(request, message=exc.message)
 
     @app.middleware("http")
     async def _request_context_middleware(request: Request, call_next):

@@ -610,7 +610,7 @@ def test_trigger_manual_source_crawl_job_creates_job_and_queues_worker(tmp_path:
         assert payload["job"]["picked_at"] is None
         assert payload["job"]["started_at"] is None
         assert payload["job"]["finished_at"] is None
-        assert payload["job"]["timeout_at"] is not None
+        assert payload["job"]["timeout_at"] is None
         assert "return_code" not in payload
         assert "command" not in payload
 
@@ -694,8 +694,10 @@ def test_trigger_manual_source_crawl_job_marks_fetch_error_as_failed(tmp_path: P
             assert job is not None
             assert job.status == "failed"
             assert int(job.error_count or 0) == 1
-            assert "failure_reason=页面获取失败: 列表接口返回 code=800 message=系统繁忙，请稍后再试!" in (job.message or "")
-            assert "failure_reason=页面获取失败: 页面获取失败:" not in (job.message or "")
+            assert job.failure_reason == "页面获取失败: 列表接口返回 code=800 message=系统繁忙，请稍后再试!"
+            assert job.runtime_stats_json is not None
+            assert job.runtime_stats_json["run_stage"] == "finished"
+            assert "页面获取失败: 列表接口返回 code=800 message=系统繁忙，请稍后再试!" in (job.message or "")
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
@@ -736,6 +738,9 @@ def test_trigger_backfill_source_crawl_job_queues_job_and_passes_backfill_year(t
             assert jobs[0].job_type == "backfill"
             assert jobs[0].status == "succeeded"
             assert jobs[0].triggered_by == "pytest-backfill"
+            assert jobs[0].job_params_json is not None
+            assert jobs[0].job_params_json["backfill_year"] == 2026
+            assert jobs[0].job_params_json["max_pages"] == 999
 
         missing_year = client.post(
             f"/sources/{seeded.code}/crawl-jobs",

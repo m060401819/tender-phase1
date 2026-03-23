@@ -137,6 +137,7 @@ def test_admin_sources_list_and_detail_pages(tmp_path: Path) -> None:
         assert "自动抓取配置" in detail_response.text
         assert "按年份回填" in detail_response.text
         assert 'name="backfill_year"' in detail_response.text
+        assert 'name="csrf_token"' in detail_response.text
         assert 'action="/admin/sources/anhui_ggzy_zfcg/manual-crawl"' in detail_response.text
         assert 'action="/admin/sources/anhui_ggzy_zfcg/schedule"' in detail_response.text
         assert 'action="/admin/sources/anhui_ggzy_zfcg/config"' in detail_response.text
@@ -149,7 +150,7 @@ def test_admin_sources_list_and_detail_pages(tmp_path: Path) -> None:
         engine.dispose()
 
 
-def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Path) -> None:
+def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     try:
@@ -159,6 +160,7 @@ def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Pat
         assert "/admin/sources/new" in list_page.text
         assert "招标信息工作台" in list_page.text
         assert "手动抓取" in list_page.text
+        assert 'name="csrf_token"' in list_page.text
         assert 'action="/admin/sources/anhui_ggzy_zfcg/manual-crawl"' in list_page.text
         assert 'href="https://ggzy.ah.gov.cn/' in list_page.text
 
@@ -169,13 +171,16 @@ def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Pat
         assert 'name="source_name"' in create_page.text
         assert 'name="official_url"' in create_page.text
         assert 'name="list_url"' in create_page.text
+        assert 'name="csrf_token"' in create_page.text
         assert 'name="schedule_days"' in create_page.text
         assert 'name="crawl_interval_minutes"' in create_page.text
         assert 'name="remark"' in create_page.text
 
         create_submit = client.post(
             "/admin/sources/new",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "source_code": "new_power_source",
                 "source_name": "新电力来源",
                 "official_url": "https://example-power.com/",
@@ -186,7 +191,8 @@ def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Pat
                 "schedule_days": "2",
                 "crawl_interval_minutes": "120",
                 "default_max_pages": "8",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert create_submit.status_code == 303
@@ -213,7 +219,9 @@ def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Pat
 
         invalid_submit = client.post(
             "/admin/sources/new",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "source_code": "",
                 "source_name": "",
                 "official_url": "not-valid-url",
@@ -224,7 +232,8 @@ def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Pat
                 "schedule_days": "5",
                 "crawl_interval_minutes": "0",
                 "default_max_pages": "0",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert invalid_submit.status_code == 400
@@ -234,7 +243,7 @@ def test_admin_source_sites_support_manual_create_entry_and_submit(tmp_path: Pat
         engine.dispose()
 
 
-def test_admin_source_pages_disable_and_reject_manual_trigger_when_active_job_exists(tmp_path: Path) -> None:
+def test_admin_source_pages_disable_and_reject_manual_trigger_when_active_job_exists(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     service = CrawlJobService(session_factory=session_factory)
@@ -257,7 +266,7 @@ def test_admin_source_pages_disable_and_reject_manual_trigger_when_active_job_ex
 
         submit = client.post(
             "/admin/sources/anhui_ggzy_zfcg/crawl-jobs",
-            data={"job_type": "manual", "max_pages": "1"},
+            data=admin_csrf(client, data={"job_type": "manual", "max_pages": "1"}),
             follow_redirects=True,
         )
         assert submit.status_code == 200
@@ -275,13 +284,15 @@ def test_admin_source_pages_disable_and_reject_manual_trigger_when_active_job_ex
         engine.dispose()
 
 
-def test_admin_source_detail_can_update_source_config(tmp_path: Path) -> None:
+def test_admin_source_detail_can_update_source_config(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     try:
         response = client.post(
             "/admin/sources/anhui_ggzy_zfcg/config",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "source_name": "Anhui Updated",
                 "official_url": "https://ggzy.ah.gov.cn/",
                 "list_url": "https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1",
@@ -290,7 +301,8 @@ def test_admin_source_detail_can_update_source_config(tmp_path: Path) -> None:
                 "supports_js_render": "true",
                 "crawl_interval_minutes": "25",
                 "default_max_pages": "6",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -319,7 +331,9 @@ def test_admin_source_detail_can_update_source_config(tmp_path: Path) -> None:
 
         bad_request = client.post(
             "/admin/sources/anhui_ggzy_zfcg/config",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "source_name": "Anhui Updated",
                 "official_url": "https://ggzy.ah.gov.cn/",
                 "list_url": "https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1",
@@ -328,14 +342,17 @@ def test_admin_source_detail_can_update_source_config(tmp_path: Path) -> None:
                 "supports_js_render": "true",
                 "crawl_interval_minutes": "25",
                 "default_max_pages": "6",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert bad_request.status_code == 400
 
         not_found = client.post(
             "/admin/sources/not-found/config",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "source_name": "X",
                 "official_url": "https://x.example.com/",
                 "list_url": "https://x.example.com/list",
@@ -344,7 +361,8 @@ def test_admin_source_detail_can_update_source_config(tmp_path: Path) -> None:
                 "supports_js_render": "false",
                 "crawl_interval_minutes": "60",
                 "default_max_pages": "1",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert not_found.status_code == 404
@@ -354,16 +372,19 @@ def test_admin_source_detail_can_update_source_config(tmp_path: Path) -> None:
 
 
 
-def test_admin_source_detail_can_update_schedule_config(tmp_path: Path) -> None:
+def test_admin_source_detail_can_update_schedule_config(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     try:
         response = client.post(
             "/admin/sources/anhui_ggzy_zfcg/schedule",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "schedule_enabled": "true",
                 "schedule_days": "3",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -384,20 +405,26 @@ def test_admin_source_detail_can_update_schedule_config(tmp_path: Path) -> None:
 
         bad_request = client.post(
             "/admin/sources/anhui_ggzy_zfcg/schedule",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "schedule_enabled": "true",
                 "schedule_days": "5",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert bad_request.status_code == 400
 
         not_found = client.post(
             "/admin/sources/not-found/schedule",
-            data={
+            data=admin_csrf(
+                client,
+                data={
                 "schedule_enabled": "true",
                 "schedule_days": "1",
-            },
+                },
+            ),
             follow_redirects=False,
         )
         assert not_found.status_code == 404
@@ -406,13 +433,13 @@ def test_admin_source_detail_can_update_schedule_config(tmp_path: Path) -> None:
         engine.dispose()
 
 
-def test_admin_source_detail_can_trigger_manual_crawl_job(tmp_path: Path) -> None:
+def test_admin_source_detail_can_trigger_manual_crawl_job(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     try:
         response = client.post(
             "/admin/sources/anhui_ggzy_zfcg/crawl-jobs",
-            data={"max_pages": "2"},
+            data=admin_csrf(client, data={"max_pages": "2"}),
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -432,14 +459,14 @@ def test_admin_source_detail_can_trigger_manual_crawl_job(tmp_path: Path) -> Non
 
         bad_request = client.post(
             "/admin/sources/anhui_ggzy_zfcg/crawl-jobs",
-            data={"max_pages": "0"},
+            data=admin_csrf(client, data={"max_pages": "0"}),
             follow_redirects=False,
         )
         assert bad_request.status_code == 400
 
         not_found = client.post(
             "/admin/sources/not-found/crawl-jobs",
-            data={"max_pages": "1"},
+            data=admin_csrf(client, data={"max_pages": "1"}),
             follow_redirects=False,
         )
         assert not_found.status_code == 404
@@ -448,13 +475,16 @@ def test_admin_source_detail_can_trigger_manual_crawl_job(tmp_path: Path) -> Non
         engine.dispose()
 
 
-def test_admin_source_detail_can_trigger_backfill_crawl_job(tmp_path: Path) -> None:
+def test_admin_source_detail_can_trigger_backfill_crawl_job(tmp_path: Path, admin_csrf) -> None:
     runner = StubRunner(return_code=0)
     client, session_factory, engine = _build_client(tmp_path, runner=runner)
     try:
         response = client.post(
             "/admin/sources/anhui_ggzy_zfcg/crawl-jobs",
-            data={"job_type": "backfill", "backfill_year": "2026", "max_pages": "500"},
+            data=admin_csrf(
+                client,
+                data={"job_type": "backfill", "backfill_year": "2026", "max_pages": "500"},
+            ),
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -476,7 +506,10 @@ def test_admin_source_detail_can_trigger_backfill_crawl_job(tmp_path: Path) -> N
 
         bad_year = client.post(
             "/admin/sources/anhui_ggzy_zfcg/crawl-jobs",
-            data={"job_type": "backfill", "backfill_year": "abc", "max_pages": "500"},
+            data=admin_csrf(
+                client,
+                data={"job_type": "backfill", "backfill_year": "abc", "max_pages": "500"},
+            ),
             follow_redirects=False,
         )
         assert bad_year.status_code == 400

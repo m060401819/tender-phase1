@@ -35,23 +35,28 @@ def build_crawl_job_progress(job: object) -> dict[str, object]:
     dedup_skipped = _as_int(_read(job, "list_items_source_duplicates_skipped")) + _as_int(
         _read(job, "source_duplicates_suppressed")
     )
+    picked_at = _as_datetime(_read(job, "picked_at"))
     heartbeat_at = _as_datetime(_read(job, "heartbeat_at"))
     timeout_at = _as_datetime(_read(job, "timeout_at")) or _as_datetime(_read(job, "lease_expires_at"))
     is_stale = _is_stale(status=status, timeout_at=timeout_at)
 
-    is_active = status in ACTIVE_CRAWL_JOB_STATUSES and not is_stale
+    is_active = status == "pending" or (status == "running" and not is_stale)
     job_type_label = JOB_TYPE_LABELS.get(job_type, job_type or "-")
     status_label = STATUS_LABELS.get(status, status or "-")
 
     if is_stale and status == "pending":
-        stage_label = "启动超时"
-        summary_text = "任务已创建但未在租约内启动，可能已丢失后台执行"
+        stage_label = "等待重派发"
+        summary_text = "任务派发租约已过期，等待独立 dispatcher 重试"
     elif is_stale and status == "running":
         stage_label = "心跳超时"
         summary_text = "任务心跳已过期，执行进程可能已退出或卡死"
     elif status == "pending":
-        stage_label = "等待启动"
-        summary_text = "已入队，等待启动"
+        if picked_at is not None:
+            stage_label = "等待 Worker 启动"
+            summary_text = "dispatcher 已领取任务，等待 worker 启动"
+        else:
+            stage_label = "等待启动"
+            summary_text = "已入队，等待启动"
     elif status == "running":
         if detail_pages_fetched > 0 or documents_saved > 0 or notices_upserted > 0:
             stage_label = "抓取详情与入库"

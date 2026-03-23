@@ -159,7 +159,7 @@ def test_admin_pages_require_authentication(tmp_path: Path) -> None:
         engine.dispose()
 
 
-def test_viewer_cannot_trigger_crawl_or_retry_and_cannot_access_ops_page(tmp_path: Path) -> None:
+def test_viewer_cannot_trigger_crawl_or_retry_and_cannot_access_ops_page(tmp_path: Path, admin_csrf) -> None:
     client, _, runner, failed_job_id, engine = _build_client(tmp_path)
     try:
         _override_user(UserRole.viewer, username="viewer-user")
@@ -171,10 +171,18 @@ def test_viewer_cannot_trigger_crawl_or_retry_and_cannot_access_ops_page(tmp_pat
         source_sites_page = client.get("/admin/source-sites")
         assert source_sites_page.status_code == 403
 
-        manual_trigger = client.post("/admin/sources/anhui_ggzy_zfcg/manual-crawl", follow_redirects=False)
+        manual_trigger = client.post(
+            "/admin/sources/anhui_ggzy_zfcg/manual-crawl",
+            data=admin_csrf(client, username="viewer-user"),
+            follow_redirects=False,
+        )
         assert manual_trigger.status_code == 403
 
-        retry = client.post(f"/admin/crawl-jobs/{failed_job_id}/retry", follow_redirects=False)
+        retry = client.post(
+            f"/admin/crawl-jobs/{failed_job_id}/retry",
+            data=admin_csrf(client, username="viewer-user"),
+            follow_redirects=False,
+        )
         assert retry.status_code == 403
         assert runner.commands == []
     finally:

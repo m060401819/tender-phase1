@@ -15,10 +15,19 @@ from sqlalchemy.orm import Session
 from app.api.endpoints.crawl_jobs import get_crawl_job, retry_crawl_job
 from app.api.endpoints.sources import get_source_crawl_trigger_service
 from app.api.schemas import CrawlJobOrderBy, CrawlJobRetryRequest, CrawlJobStatus, CrawlJobType
-from app.core.auth import AuthenticatedUser, UserRole, get_current_user, has_required_role, require_ops_user
+from app.core.auth import (
+    AuthenticatedUser,
+    UserRole,
+    get_current_user,
+    has_required_role,
+    render_admin_template,
+    require_admin_csrf,
+    require_ops_user,
+)
 from app.db.session import get_db
 from app.repositories import CrawlJobRepository
 from app.services import CrawlJobQueryService, SourceCrawlTriggerService
+from app.services.crawl_job_payloads import read_payload_int, read_payload_text
 from app.services.crawl_job_progress_service import build_crawl_job_progress
 
 router = APIRouter(tags=["admin-crawl-jobs"])
@@ -89,7 +98,6 @@ def admin_crawl_jobs_list(
     )
 
     context = {
-        "request": request,
         "jobs": jobs,
         "source_code": source_code or "",
         "status": status.value if status else "",
@@ -118,7 +126,13 @@ def admin_crawl_jobs_list(
         "auto_refresh_interval_seconds": 5,
         "can_retry_jobs": has_required_role(current_user.role, UserRole.ops),
     }
-    return TEMPLATES.TemplateResponse(name="admin/crawl_jobs_list.html", context=context, request=request)
+    return render_admin_template(
+        templates=TEMPLATES,
+        request=request,
+        name="admin/crawl_jobs_list.html",
+        context=context,
+        current_user=current_user,
+    )
 
 
 @router.post("/admin/crawl-jobs/{job_id}/retry", dependencies=[Depends(require_ops_user)])
@@ -126,6 +140,7 @@ def admin_retry_crawl_job(
     job_id: int,
     db: Session = Depends(get_db),
     trigger_service: SourceCrawlTriggerService = Depends(get_source_crawl_trigger_service),
+    _csrf_protected: None = Depends(require_admin_csrf),
 ):
     try:
         result = retry_crawl_job(
@@ -150,12 +165,13 @@ def admin_crawl_job_detail(
     normalized_job_type = _enum_text(payload.job_type)
     normalized_status = _enum_text(payload.status)
     normalized_retried_by_status = _enum_text(payload.retried_by_status)
-    message_fields = _parse_message_key_values(payload.message)
+    job_params = payload.job_params_json or {}
+    runtime_stats = payload.runtime_stats_json or {}
     dedup_skipped = int(payload.list_items_source_duplicates_skipped or 0) + int(payload.source_duplicates_suppressed or 0)
-    pages_scraped = _as_int(message_fields.get("pages_scraped")) or payload.pages_fetched
+    pages_scraped = read_payload_int(runtime_stats, "pages_scraped") or payload.pages_fetched
 
-    list_seen = _as_int(message_fields.get("list_seen")) or payload.list_items_seen
-    list_unique = _as_int(message_fields.get("list_unique")) or payload.list_items_unique
+    list_seen = read_payload_int(runtime_stats, "list_seen") or payload.list_items_seen
+    list_unique = read_payload_int(runtime_stats, "list_unique") or payload.list_items_unique
     job_dict = {
         "id": payload.id,
         "source_site_id": payload.source_site_id,
@@ -190,15 +206,19 @@ def admin_crawl_job_detail(
         "records_updated": payload.records_updated,
         "source_duplicates_suppressed": payload.source_duplicates_suppressed,
         "pages_scraped": pages_scraped,
-        "detail_requests": _as_int(message_fields.get("detail_requests")) or payload.detail_pages_fetched,
-        "dedup_skipped": _as_int(message_fields.get("dedup_skipped")) or dedup_skipped,
-        "notices_written": _as_int(message_fields.get("notices_written")) or payload.notices_upserted,
-        "raw_documents_written": _as_int(message_fields.get("raw_documents_written")) or payload.documents_saved,
-        "backfill_year": message_fields.get("backfill_year"),
-        "first_publish_date_seen": message_fields.get("first_publish_date_seen"),
-        "last_publish_date_seen": message_fields.get("last_publish_date_seen"),
-        "failure_reason": message_fields.get("failure_reason"),
+        "detail_requests": read_payload_int(runtime_stats, "detail_requests") or payload.detail_pages_fetched,
+        "dedup_skipped": read_payload_int(runtime_stats, "dedup_skipped") or dedup_skipped,
+        "notices_written": read_payload_int(runtime_stats, "notices_written") or payload.notices_upserted,
+        "raw_documents_written": read_payload_int(runtime_stats, "raw_documents_written") or payload.documents_saved,
+        "max_pages": read_payload_int(job_params, "max_pages"),
+        "backfill_year": read_payload_int(job_params, "backfill_year"),
+        "run_stage": read_payload_text(runtime_stats, "run_stage"),
+        "first_publish_date_seen": read_payload_text(runtime_stats, "first_publish_date_seen"),
+        "last_publish_date_seen": read_payload_text(runtime_stats, "last_publish_date_seen"),
+        "failure_reason": payload.failure_reason,
         "recent_crawl_error_count": payload.recent_crawl_error_count,
+        "job_params_json": job_params or None,
+        "runtime_stats_json": runtime_stats or None,
         "message": payload.message,
     }
     progress = build_crawl_job_progress(payload)
@@ -248,14 +268,18 @@ def admin_crawl_job_detail(
             "records_updated": payload.records_updated,
             "source_duplicates_suppressed": payload.source_duplicates_suppressed,
             "pages_scraped": pages_scraped,
-            "detail_requests": _as_int(message_fields.get("detail_requests")) or payload.detail_pages_fetched,
-            "dedup_skipped": _as_int(message_fields.get("dedup_skipped")) or dedup_skipped,
-            "notices_written": _as_int(message_fields.get("notices_written")) or payload.notices_upserted,
-            "raw_documents_written": _as_int(message_fields.get("raw_documents_written")) or payload.documents_saved,
-            "backfill_year": message_fields.get("backfill_year"),
-            "first_publish_date_seen": message_fields.get("first_publish_date_seen"),
-            "last_publish_date_seen": message_fields.get("last_publish_date_seen"),
-            "failure_reason": message_fields.get("failure_reason"),
+            "detail_requests": read_payload_int(runtime_stats, "detail_requests") or payload.detail_pages_fetched,
+            "dedup_skipped": read_payload_int(runtime_stats, "dedup_skipped") or dedup_skipped,
+            "notices_written": read_payload_int(runtime_stats, "notices_written") or payload.notices_upserted,
+            "raw_documents_written": read_payload_int(runtime_stats, "raw_documents_written") or payload.documents_saved,
+            "max_pages": read_payload_int(job_params, "max_pages"),
+            "backfill_year": read_payload_int(job_params, "backfill_year"),
+            "run_stage": read_payload_text(runtime_stats, "run_stage"),
+            "first_publish_date_seen": read_payload_text(runtime_stats, "first_publish_date_seen"),
+            "last_publish_date_seen": read_payload_text(runtime_stats, "last_publish_date_seen"),
+            "job_params_json": job_params or None,
+            "runtime_stats_json": runtime_stats or None,
+            "failure_reason": payload.failure_reason,
             "recent_crawl_error_count": payload.recent_crawl_error_count,
             "message": payload.message,
         },
@@ -345,24 +369,6 @@ def _fmt_datetime(value: object) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()  # type: ignore[no-any-return]
     return str(value)
-
-
-def _parse_message_key_values(message: str | None) -> dict[str, str]:
-    if not message:
-        return {}
-    fields: dict[str, str] = {}
-    for part in message.split(";"):
-        chunk = part.strip()
-        if "=" not in chunk:
-            continue
-        key, value = chunk.split("=", maxsplit=1)
-        normalized_key = key.strip()
-        if not normalized_key:
-            continue
-        fields[normalized_key] = value.strip()
-    return fields
-
-
 def _as_int(value: object) -> int | None:
     if value is None:
         return None
