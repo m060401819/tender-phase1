@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scrapy.http import Response
+from scrapy.http import TextResponse
 
 from tender_crawler.parsers.base import BaseNoticeParser, ParsedNotice
 
@@ -8,7 +8,7 @@ from tender_crawler.parsers.base import BaseNoticeParser, ParsedNotice
 class ExampleSourceParser(BaseNoticeParser):
     """Parser for sample source to demonstrate parser extension points."""
 
-    def parse(self, response: Response) -> ParsedNotice:
+    def parse(self, response: TextResponse) -> ParsedNotice:
         notice = super().parse(response)
         notice.notice_type = "announcement"
         notice.region = "示例区域"

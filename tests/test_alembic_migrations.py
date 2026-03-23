@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -300,6 +301,44 @@ def test_migration_20260322_0011_collapses_duplicate_active_jobs_and_enforces_mu
             )
     finally:
         after_engine.dispose()
+
+
+def test_programmatic_upgrade_preserves_existing_app_loggers_and_handlers(
+    migration_backend: MigrationBackend,
+    caplog,
+) -> None:
+    root_logger = logging.getLogger()
+    handlers_before = tuple(root_logger.handlers)
+
+    app_logger = logging.getLogger("app.main")
+    dispatch_logger = logging.getLogger("app.services.crawl_job_dispatch_service")
+    assert app_logger.disabled is False
+    assert dispatch_logger.disabled is False
+
+    _upgrade(migration_backend.database_url, "head")
+
+    assert tuple(root_logger.handlers) == handlers_before
+    assert app_logger.disabled is False
+    assert dispatch_logger.disabled is False
+
+    with caplog.at_level(logging.INFO):
+        app_logger.error(
+            "host app logger still emits structured events after alembic upgrade",
+            extra={"event": "host_logger_still_active_after_alembic_upgrade"},
+        )
+        dispatch_logger.warning(
+            "dispatch logger still emits structured events after alembic upgrade",
+            extra={"event": "dispatch_logger_still_active_after_alembic_upgrade"},
+        )
+
+    assert any(
+        getattr(record, "event", "") == "host_logger_still_active_after_alembic_upgrade"
+        for record in caplog.records
+    )
+    assert any(
+        getattr(record, "event", "") == "dispatch_logger_still_active_after_alembic_upgrade"
+        for record in caplog.records
+    )
 
 
 def _make_alembic_config(database_url: str) -> Config:

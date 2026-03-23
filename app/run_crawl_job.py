@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 
 from sqlalchemy import create_engine
@@ -14,17 +15,36 @@ from app.services.crawl_job_payloads import build_job_params_payload, build_runt
 from app.services import CrawlJobService, CrawlJobStartConflictError, SourceCrawlTriggerService
 
 LOGGER = logging.getLogger(__name__)
+_SOURCE_CODE_PATTERN = re.compile(r"^[a-z0-9_]+$")
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a queued crawl job in a detached worker process.")
-    parser.add_argument("--database-url", required=True)
-    parser.add_argument("--source-code", required=True)
+    parser.add_argument("--database-url", required=True, type=_database_url_arg)
+    parser.add_argument("--source-code", required=True, type=_source_code_arg)
     parser.add_argument("--crawl-job-id", required=True, type=int)
     parser.add_argument("--job-type", required=True, choices=["manual", "scheduled", "backfill", "manual_retry"])
     parser.add_argument("--max-pages", type=int, default=None)
     parser.add_argument("--backfill-year", type=int, default=None)
     return parser
+
+
+def _database_url_arg(value: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise argparse.ArgumentTypeError("database-url must not be empty")
+    if any(char in text for char in ("\x00", "\r", "\n")):
+        raise argparse.ArgumentTypeError("database-url contains unsupported control characters")
+    return text
+
+
+def _source_code_arg(value: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise argparse.ArgumentTypeError("source-code must not be empty")
+    if not _SOURCE_CODE_PATTERN.fullmatch(text):
+        raise argparse.ArgumentTypeError("source-code contains unsupported characters")
+    return text
 
 
 def main(argv: list[str] | None = None) -> int:

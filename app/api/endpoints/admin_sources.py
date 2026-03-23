@@ -231,17 +231,19 @@ async def admin_source_create_submit(
         and crawl_interval_minutes is not None
     ):
         try:
-            payload = SourceSiteCreateRequest(
-                source_code=form_values["source_code"],
-                source_name=form_values["source_name"],
-                official_url=form_values["official_url"],
-                list_url=form_values["list_url"],
-                remark=form_values["remark"] or None,
-                is_active=is_active,
-                schedule_enabled=schedule_enabled,
-                schedule_days=schedule_days,
-                crawl_interval_minutes=crawl_interval_minutes,
-                default_max_pages=default_max_pages,
+            payload = SourceSiteCreateRequest.model_validate(
+                {
+                    "source_code": form_values["source_code"],
+                    "source_name": form_values["source_name"],
+                    "official_url": form_values["official_url"],
+                    "list_url": form_values["list_url"],
+                    "remark": form_values["remark"] or None,
+                    "is_active": is_active,
+                    "schedule_enabled": schedule_enabled,
+                    "schedule_days": schedule_days,
+                    "crawl_interval_minutes": crawl_interval_minutes,
+                    "default_max_pages": default_max_pages,
+                }
             )
         except ValidationError as exc:
             errors.extend(_humanize_validation_errors(exc))
@@ -515,11 +517,13 @@ async def admin_trigger_source_crawl_job(
             raise HTTPException(status_code=400, detail="backfill_year must be integer") from exc
 
     try:
-        payload = SourceCrawlJobTriggerRequest(
-            max_pages=max_pages,
-            triggered_by="admin",
-            job_type=job_type_raw,
-            backfill_year=backfill_year,
+        payload = SourceCrawlJobTriggerRequest.model_validate(
+            {
+                "max_pages": max_pages,
+                "triggered_by": "admin",
+                "job_type": job_type_raw,
+                "backfill_year": backfill_year,
+            }
         )
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=f"invalid payload: {exc.errors()}") from exc
@@ -534,7 +538,8 @@ async def admin_trigger_source_crawl_job(
     effective_max_pages = payload.max_pages if payload.max_pages is not None else int(source_model.default_max_pages)
     try:
         if payload.job_type == "backfill":
-            assert payload.backfill_year is not None
+            if payload.backfill_year is None:
+                raise HTTPException(status_code=400, detail="backfill_year is required for backfill job")
             result = trigger_service.queue_backfill_crawl(
                 source=source_model,
                 backfill_year=payload.backfill_year,
@@ -640,7 +645,7 @@ async def admin_update_source_config(
         "default_max_pages": _parse_form_positive_int(default_max_pages_raw, field_name="default_max_pages"),
     }
     try:
-        payload = SourceSitePatchRequest(**payload_data)
+        payload = SourceSitePatchRequest.model_validate(payload_data)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=f"invalid payload: {exc.errors()}") from exc
 

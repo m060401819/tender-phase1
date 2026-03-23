@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TypedDict
 
 ACTIVE_CRAWL_JOB_STATUSES = {"pending", "running"}
 
@@ -22,7 +23,19 @@ STATUS_LABELS = {
 }
 
 
-def build_crawl_job_progress(job: object) -> dict[str, object]:
+class CrawlJobProgress(TypedDict):
+    is_active: bool
+    is_stale: bool
+    job_type_label: str
+    status_label: str
+    stage_label: str
+    summary_text: str
+    heartbeat_at: str | None
+    timeout_at: str | None
+    lease_expires_at: str | None
+
+
+def build_crawl_job_progress(job: object) -> CrawlJobProgress:
     status = _as_text(_read(job, "status"), default="-")
     job_type = _as_text(_read(job, "job_type"), default="-")
     pages_fetched = _as_int(_read(job, "pages_fetched"))
@@ -108,8 +121,8 @@ def build_crawl_job_progress(job: object) -> dict[str, object]:
     }
 
 
-def _read(job: object, field: str) -> Any:
-    if isinstance(job, dict):
+def _read(job: object, field: str) -> object:
+    if isinstance(job, Mapping):
         return job.get(field)
     return getattr(job, field, None)
 
@@ -126,10 +139,30 @@ def _as_text(value: object, *, default: str) -> str:
 
 
 def _as_int(value: object) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
+    if isinstance(value, Enum):
+        value = value.value
+    if value is None:
         return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 0
+        try:
+            return int(text)
+        except ValueError:
+            return 0
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
 
 
 def _as_datetime(value: object) -> datetime | None:

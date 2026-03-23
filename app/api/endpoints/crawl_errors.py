@@ -11,6 +11,7 @@ from app.api.schemas import (
     CrawlErrorNoticeVersionSummaryResponse,
     CrawlErrorRawDocumentSummaryResponse,
     CrawlErrorStage,
+    NoticeType,
 )
 from app.db.session import get_db
 from app.repositories import CrawlErrorRepository
@@ -44,7 +45,7 @@ def list_crawl_errors(
                 id=item.id,
                 source_code=item.source_code,
                 crawl_job_id=item.crawl_job_id,
-                stage=item.stage,
+                stage=_to_crawl_error_stage(item.stage),
                 error_type=item.error_type,
                 message=item.message,
                 url=item.url,
@@ -69,7 +70,7 @@ def get_crawl_error_detail(error_id: int, db: Session = Depends(get_db)) -> Craw
         id=item.id,
         source_code=item.source_code,
         crawl_job_id=item.crawl_job_id,
-        stage=item.stage,
+        stage=_to_crawl_error_stage(item.stage),
         error_type=item.error_type,
         message=item.message,
         detail=item.detail,
@@ -91,7 +92,7 @@ def get_crawl_error_detail(error_id: int, db: Session = Depends(get_db)) -> Craw
                 id=item.notice.id,
                 source_code=item.notice.source_code,
                 title=item.notice.title,
-                notice_type=item.notice.notice_type,
+                notice_type=_to_notice_type(item.notice.notice_type),
                 current_version_id=item.notice.current_version_id,
             )
             if item.notice is not None
@@ -104,9 +105,17 @@ def get_crawl_error_detail(error_id: int, db: Session = Depends(get_db)) -> Craw
                 version_no=item.notice_version.version_no,
                 is_current=item.notice_version.is_current,
                 title=item.notice_version.title,
-                notice_type=item.notice_version.notice_type,
+                notice_type=_to_notice_type(item.notice_version.notice_type),
             )
             if item.notice_version is not None
             else None
         ),
     )
+
+
+def _to_crawl_error_stage(value: str) -> CrawlErrorStage:
+    return CrawlErrorStage(value)
+
+
+def _to_notice_type(value: str) -> NoticeType:
+    return NoticeType(value)

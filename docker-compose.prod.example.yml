@@ -19,6 +19,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *runtime-env
+      APP_HOST: ${APP_HOST:-0.0.0.0}
       AUTH_BASIC_USERS_JSON: ${AUTH_BASIC_USERS_JSON:?AUTH_BASIC_USERS_JSON is required}
     ports:
       - "8000:8000"

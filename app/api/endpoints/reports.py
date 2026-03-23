@@ -25,8 +25,10 @@ def export_source_ops_report_xlsx(
         source_code=source_code,
     )
     workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "source_ops"
+    default_sheet = workbook.active
+    sheet = workbook.create_sheet(title="source_ops")
+    if default_sheet is not None:
+        workbook.remove(default_sheet)
     sheet.append(
         [
             "source_code",

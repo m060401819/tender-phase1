@@ -13,6 +13,7 @@ WEB_URL="http://127.0.0.1:8000/admin/home"
 DOCS_URL="http://127.0.0.1:8000/docs"
 HEALTH_URL="http://127.0.0.1:8000/healthz"
 DEV_UP_REUSE_RUNNING="${DEV_UP_REUSE_RUNNING:-0}"
+APP_HOST="${APP_HOST:-127.0.0.1}"
 
 mkdir -p "$LOG_DIR"
 
@@ -197,7 +198,7 @@ fi
 
 if [ "$web_ready" -eq 0 ]; then
   echo "[dev_up] 后台启动 Web 服务，日志输出到 $LOG_FILE"
-  nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 >>"$LOG_FILE" 2>&1 &
+  nohup uvicorn app.main:app --host "$APP_HOST" --port 8000 >>"$LOG_FILE" 2>&1 &
   web_pid=$!
   echo "$web_pid" > "$PID_FILE"
 

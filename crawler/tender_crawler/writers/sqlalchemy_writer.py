@@ -324,8 +324,8 @@ class SqlAlchemyNoticeWriter(BaseNoticeWriter):
                 version.change_summary = _as_str(item.get("change_summary"))
                 version.raw_document_id = raw_document_id
 
-                structured_data = item.get("structured_data") if isinstance(item.get("structured_data"), dict) else {}
-                structured_data = dict(structured_data)
+                structured_data_value = item.get("structured_data")
+                structured_data = dict(structured_data_value) if isinstance(structured_data_value, dict) else {}
                 structured_data.update(
                     {
                         "source_site_name": _as_str(item.get("source_site_name")),
@@ -950,7 +950,16 @@ def _infer_attachment_mime_type(*, mime_type: str | None, file_name: str | None,
     return guessed
 
 
-def _model_create_kwargs(session: Session, model_cls: type, **kwargs: object) -> dict:
+def _model_create_kwargs(
+    session: Session,
+    model_cls: type[SourceSite]
+    | type[RawDocument]
+    | type[TenderNotice]
+    | type[NoticeVersion]
+    | type[TenderAttachment]
+    | type[CrawlError],
+    **kwargs: object,
+) -> dict:
     if not _is_sqlite(session):
         return kwargs
     if "id" in kwargs and kwargs["id"] is not None:

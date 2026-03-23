@@ -7,7 +7,7 @@ import mimetypes
 from typing import Any
 from urllib.parse import urljoin, urlparse, unquote
 
-from scrapy.http import Response
+from scrapy.http import TextResponse
 
 from tender_crawler.utils import normalize_url
 
@@ -49,7 +49,7 @@ class ParsedNotice:
 class BaseNoticeParser:
     """Base parser that converts raw HTML response to normalized notice payload."""
 
-    def parse(self, response: Response) -> ParsedNotice:
+    def parse(self, response: TextResponse) -> ParsedNotice:
         title = self._extract_title(response)
         summary = self._extract_summary(response)
         attachments = self.extract_attachments(response)
@@ -65,15 +65,15 @@ class BaseNoticeParser:
             attachments=attachments,
         )
 
-    def _extract_title(self, response: Response) -> str:
+    def _extract_title(self, response: TextResponse) -> str:
         title = response.css("title::text").get(default="").strip()
         return title or response.url
 
-    def _extract_summary(self, response: Response) -> str | None:
+    def _extract_summary(self, response: TextResponse) -> str | None:
         text = response.css("p::text").get(default="").strip()
         return text or None
 
-    def extract_attachments(self, response: Response) -> list[ParsedAttachment]:
+    def extract_attachments(self, response: TextResponse) -> list[ParsedAttachment]:
         attachments: list[ParsedAttachment] = []
         seen_urls: set[str] = set()
 

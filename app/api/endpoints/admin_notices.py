@@ -300,7 +300,13 @@ def admin_notice_detail(
     selected_version_id = int(selected_version["id"]) if selected_version is not None else None
     selected_version_no = int(selected_version["version_no"]) if selected_version is not None else None
 
-    version_no_map = {int(item["id"]): int(item["version_no"]) for item in versions}
+    version_no_map: dict[int, int] = {}
+    for item in versions:
+        item_id = _as_int(item.get("id"))
+        item_version_no = _as_int(item.get("version_no"))
+        if item_id is None or item_version_no is None:
+            continue
+        version_no_map[item_id] = item_version_no
 
     all_attachments = [
         {
@@ -444,17 +450,38 @@ def _select_version(
 
     if version_id is not None:
         for item in versions:
-            if int(item["id"]) == version_id:
+            item_id = _as_int(item.get("id"))
+            if item_id == version_id:
                 return item
 
     if version_no is not None:
         for item in versions:
-            if int(item["version_no"]) == version_no:
+            item_version_no = _as_int(item.get("version_no"))
+            if item_version_no == version_no:
                 return item
 
     if current_version_id is not None:
         for item in versions:
-            if int(item["id"]) == current_version_id:
+            item_id = _as_int(item.get("id"))
+            if item_id == current_version_id:
                 return item
 
     return versions[0]
+
+
+def _as_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None

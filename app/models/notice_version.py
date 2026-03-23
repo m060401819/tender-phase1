@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     JSON,
@@ -20,6 +21,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.raw_document import RawDocument
+    from app.models.tender_attachment import TenderAttachment
+    from app.models.tender_notice import TenderNotice
 
 
 class NoticeVersion(TimestampMixin, Base):
@@ -71,9 +77,9 @@ class NoticeVersion(TimestampMixin, Base):
     structured_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    notice: Mapped["TenderNotice"] = relationship(
+    notice: Mapped[TenderNotice] = relationship(
         back_populates="versions",
         foreign_keys=[notice_id],
     )
-    raw_document: Mapped["RawDocument | None"] = relationship(back_populates="notice_versions")
-    attachments: Mapped[list["TenderAttachment"]] = relationship(back_populates="notice_version")
+    raw_document: Mapped[RawDocument | None] = relationship(back_populates="notice_versions")
+    attachments: Mapped[list[TenderAttachment]] = relationship(back_populates="notice_version")

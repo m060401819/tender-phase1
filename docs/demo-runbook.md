@@ -27,7 +27,7 @@ APP_ENV=dev python scripts/seed_sources.py --demo
 4. 启动 FastAPI：
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+APP_HOST=${APP_HOST:-127.0.0.1} uvicorn app.main:app --reload --host "$APP_HOST" --port 8000
 ```
 
 5. 打开以下页面确认来源已可见：

@@ -9,6 +9,7 @@ from app.api.schemas import (
     RawDocumentListResponse,
     RawDocumentNoticeSummaryResponse,
     RawDocumentNoticeVersionSummaryResponse,
+    NoticeType,
 )
 from app.db.session import get_db
 from app.repositories import RawDocumentRepository
@@ -86,7 +87,7 @@ def get_raw_document_detail(raw_document_id: int, db: Session = Depends(get_db))
                 version_no=item.notice_version.version_no,
                 is_current=item.notice_version.is_current,
                 title=item.notice_version.title,
-                notice_type=item.notice_version.notice_type,
+                notice_type=_to_notice_type(item.notice_version.notice_type),
             )
             if item.notice_version is not None
             else None
@@ -96,7 +97,7 @@ def get_raw_document_detail(raw_document_id: int, db: Session = Depends(get_db))
                 id=item.tender_notice.id,
                 source_code=item.tender_notice.source_code,
                 title=item.tender_notice.title,
-                notice_type=item.tender_notice.notice_type,
+                notice_type=_to_notice_type(item.tender_notice.notice_type),
                 published_at=item.tender_notice.published_at,
                 current_version_id=item.tender_notice.current_version_id,
             )
@@ -104,3 +105,7 @@ def get_raw_document_detail(raw_document_id: int, db: Session = Depends(get_db))
             else None
         ),
     )
+
+
+def _to_notice_type(value: str) -> NoticeType:
+    return NoticeType(value)

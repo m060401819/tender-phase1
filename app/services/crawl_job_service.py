@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import create_engine, func, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import CrawlJob, SourceSite
@@ -367,7 +368,9 @@ class CrawlJobService:
         moment = picked_at or datetime.now(timezone.utc)
         pending_timeout_at = _calculate_lease_expires_at(moment, lease_seconds=lease_seconds)
         timeout_expr = func.coalesce(CrawlJob.timeout_at, CrawlJob.lease_expires_at)
-        result = session.execute(
+        result = cast(
+            CursorResult[Any],
+            session.execute(
             update(CrawlJob)
             .where(
                 CrawlJob.id == int(job_id),
@@ -384,6 +387,7 @@ class CrawlJobService:
                 timeout_at=pending_timeout_at,
                 lease_expires_at=pending_timeout_at,
             )
+            ),
         )
         if int(result.rowcount or 0) <= 0:
             return None
@@ -628,7 +632,7 @@ def reconcile_expired_jobs_in_session(
     if limit is not None:
         stmt = stmt.limit(limit)
 
-    jobs = session.scalars(stmt).all()
+    jobs = list(session.scalars(stmt).all())
     for job in jobs:
         _expire_job(job, now=moment)
     return jobs
@@ -830,7 +834,11 @@ def _resolve_timeout_at(job: CrawlJob) -> datetime | None:
     return job.timeout_at or job.lease_expires_at
 
 
-def _model_create_kwargs(session: Session, model_cls: type, **kwargs: Any) -> dict[str, Any]:
+def _model_create_kwargs(
+    session: Session,
+    model_cls: type[CrawlJob] | type[SourceSite],
+    **kwargs: Any,
+) -> dict[str, Any]:
     if not _is_sqlite(session):
         return kwargs
     if "id" in kwargs and kwargs["id"] is not None:

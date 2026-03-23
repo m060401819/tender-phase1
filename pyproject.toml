@@ -29,7 +29,8 @@ test = [
 ]
 dev = [
   "pytest>=8.2.0,<9.0.0",
-  "httpx>=0.27.0,<1.0.0"
+  "httpx>=0.27.0,<1.0.0",
+  "types-openpyxl==3.1.5.20250919"
 ]
 
 [tool.setuptools.packages.find]
@@ -40,3 +41,11 @@ include = ["app*"]
 testpaths = ["tests"]
 pythonpath = [".", "crawler"]
 addopts = "-q"
+
+[[tool.mypy.overrides]]
+module = [
+  "apscheduler.jobstores.base",
+  "apscheduler.schedulers.background",
+  "apscheduler.triggers.interval",
+]
+ignore_missing_imports = true

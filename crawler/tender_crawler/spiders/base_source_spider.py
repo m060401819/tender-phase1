@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import scrapy
+from scrapy.http import Response, TextResponse
 from twisted.python.failure import Failure
 
 from tender_crawler.items import (
@@ -26,12 +27,12 @@ class BaseSourceSpider(scrapy.Spider):
     """Base spider enforcing crawl -> parse -> item flow separation."""
 
     source_code = "base_source"
-    parser_cls = BaseNoticeParser
+    parser_cls: type[BaseNoticeParser] = BaseNoticeParser
 
     def __init__(self, crawl_job_id: int | None = None, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.crawl_job_id = int(crawl_job_id) if crawl_job_id is not None else None
-        self.parser = self.parser_cls()
+        self.parser: BaseNoticeParser = self.parser_cls()
 
     def start_requests(self):
         for url in self.start_urls:
@@ -42,10 +43,11 @@ class BaseSourceSpider(scrapy.Spider):
                 dont_filter=True,
             )
 
-    def parse(self, response: scrapy.http.Response):
+    def parse(self, response: Response):
+        text_response = self._require_text_response(response)
         fetched_at = datetime.now(timezone.utc)
-        normalized_url = normalize_url(response.url)
-        raw_body = response.text or ""
+        normalized_url = normalize_url(text_response.url)
+        raw_body = text_response.text or ""
         url_hash = sha256_text(normalized_url)
         content_hash = sha256_text(raw_body)
 
@@ -53,7 +55,7 @@ class BaseSourceSpider(scrapy.Spider):
             item_type=ITEM_TYPE_RAW_DOCUMENT,
             source_code=self.source_code,
             crawl_job_id=self.crawl_job_id,
-            url=response.url,
+            url=text_response.url,
             normalized_url=normalized_url,
             url_hash=url_hash,
             content_hash=content_hash,
@@ -61,21 +63,21 @@ class BaseSourceSpider(scrapy.Spider):
             fetched_at=fetched_at.isoformat(),
             storage_uri="",
             raw_body=raw_body,
-            http_status=response.status,
-            mime_type=response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore"),
-            charset=response.encoding,
-            title=response.css("title::text").get(default="").strip() or None,
+            http_status=text_response.status,
+            mime_type=self._decode_header_value(text_response.headers.get("Content-Type")),
+            charset=text_response.encoding,
+            title=text_response.css("title::text").get(default="").strip() or None,
             content_length=len(raw_body.encode("utf-8")),
-            extra_meta={"source_url": response.url},
+            extra_meta={"source_url": text_response.url},
         )
         yield raw_item
 
         try:
-            parsed = self.parser.parse(response)
+            parsed = self.parser.parse(text_response)
         except Exception as exc:  # pragma: no cover - covered by behavior, not exact branch
             yield self._build_error_item(
                 stage="parse",
-                url=response.url,
+                url=text_response.url,
                 error_type=exc.__class__.__name__,
                 error_message=str(exc),
                 traceback_text="",
@@ -103,7 +105,7 @@ class BaseSourceSpider(scrapy.Spider):
             budget_amount=str(parsed.budget_amount) if parsed.budget_amount is not None else None,
             budget_currency=parsed.budget_currency,
             summary=parsed.summary,
-            source_url=response.url,
+            source_url=text_response.url,
             raw_content_hash=content_hash,
         )
         yield notice_item
@@ -150,12 +152,13 @@ class BaseSourceSpider(scrapy.Spider):
                 file_ext=(attachment.file_name.rsplit(".", maxsplit=1)[-1] if "." in attachment.file_name else None),
                 file_size_bytes=attachment.file_size_bytes,
                 published_at=parsed.published_at.isoformat() if parsed.published_at else None,
-                source_url=response.url,
+                source_url=text_response.url,
             )
             yield attachment_item
 
     def handle_request_error(self, failure: Failure):
-        request_url = failure.request.url if failure.request else None
+        request = getattr(failure, "request", None)
+        request_url = request.url if request is not None else None
         error_type = failure.type.__name__ if failure.type else "RequestError"
         yield self._build_error_item(
             stage="fetch",
@@ -187,3 +190,15 @@ class BaseSourceSpider(scrapy.Spider):
             retryable=retryable,
             occurred_at=datetime.now(timezone.utc).isoformat(),
         )
+
+    @staticmethod
+    def _decode_header_value(value: bytes | None) -> str:
+        if value is None:
+            return ""
+        return value.decode("utf-8", errors="ignore")
+
+    @staticmethod
+    def _require_text_response(response: Response) -> TextResponse:
+        if not isinstance(response, TextResponse):
+            raise TypeError(f"Expected TextResponse, got {type(response).__name__}")
+        return response

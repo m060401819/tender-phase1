@@ -241,7 +241,6 @@ def test_source_sites_manual_crawl_e2e_redirects_and_refreshes_status(tmp_path: 
     try:
         page.goto("/admin/source-sites", wait_until="networkidle")
 
-        button = page.get_by_test_id("manual-crawl-btn-anhui_ggzy_zfcg")
         state = page.evaluate(
             """() => {
                 const button = document.querySelector('[data-testid="manual-crawl-btn-anhui_ggzy_zfcg"]');
@@ -319,7 +318,6 @@ def test_crawl_jobs_retry_e2e_disables_button_and_creates_retry_job(tmp_path: Pa
     try:
         page.goto("/admin/crawl-jobs", wait_until="networkidle")
 
-        retry_button = page.get_by_test_id("retry-job-btn-1")
         state = page.evaluate(
             """() => {
                 const button = document.querySelector('[data-testid="retry-job-btn-1"]');

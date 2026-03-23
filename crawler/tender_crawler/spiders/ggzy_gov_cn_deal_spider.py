@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timezone
 import json
 from typing import Any
 
 import scrapy
+from scrapy.http import Response, TextResponse
 
 from tender_crawler.items import (
     ITEM_TYPE_NOTICE_VERSION,
@@ -20,6 +22,9 @@ from tender_crawler.parsers import GgzyGovCnDealListRecord, GgzyGovCnDealParser
 from tender_crawler.spiders.base_source_spider import BaseSourceSpider
 from tender_crawler.utils import normalize_url, sha256_text
 
+FormDataValue = str | Iterable[str]
+FormData = dict[str, FormDataValue]
+
 
 class GgzyGovCnDealSpider(BaseSourceSpider):
     """Crawler for national public resource trading platform government procurement aggregation."""
@@ -29,7 +34,8 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
     allowed_domains = ["ggzy.gov.cn", "www.ggzy.gov.cn"]
     start_urls = ["https://www.ggzy.gov.cn/deal/dealList.html?HEADER_DEAL_TYPE=02"]
 
-    parser_cls = GgzyGovCnDealParser
+    parser_cls: type[GgzyGovCnDealParser] = GgzyGovCnDealParser
+    parser: GgzyGovCnDealParser
 
     list_api_url = "https://www.ggzy.gov.cn/information/pubTradingInfo/getTradList"
 
@@ -59,6 +65,8 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
         self.deal_classify = self._as_str(deal_classify) or "02"
         self.deal_stage = self._as_str(deal_stage) or "0200"
         self.keyword = self._as_str(keyword) or ""
+        self.time_begin: str | None = None
+        self.time_end: str | None = None
 
         if self.job_type == "backfill" or self.backfill_year is not None:
             self.backfill_year = self.backfill_year or datetime.now(timezone.utc).year
@@ -86,11 +94,12 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
                 dont_filter=True,
             )
 
-    def parse_landing(self, response: scrapy.http.Response):
+    def parse_landing(self, response: Response):
+        text_response = self._require_text_response(response)
         yield self._build_raw_item(
-            response=response,
-            raw_body=response.text,
-            raw_url=response.url,
+            response=text_response,
+            raw_body=text_response.text,
+            raw_url=text_response.url,
             role="landing",
             extra_meta={
                 "job_type": self.job_type,
@@ -102,7 +111,7 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
             },
         )
 
-        yield self._build_list_request(page=1, list_page_url=response.url)
+        yield self._build_list_request(page=1, list_page_url=text_response.url)
 
     def _build_list_request(self, *, page: int, list_page_url: str) -> scrapy.FormRequest:
         headers = {
@@ -123,29 +132,36 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
             dont_filter=True,
         )
 
-    def parse_list_page(self, response: scrapy.http.Response, page: int, list_page_url: str):
+    def parse_list_page(self, response: Response, page: int, list_page_url: str):
+        text_response = self._require_text_response(response)
         self.pages_scraped += 1
 
         payload: dict[str, Any] = {}
         parse_error_message = None
         try:
-            payload = json.loads(response.text)
+            payload_raw = json.loads(text_response.text)
+            if isinstance(payload_raw, dict):
+                payload = payload_raw
+            else:
+                parse_error_message = "列表解析失败: 响应JSON不是对象"
         except json.JSONDecodeError as exc:
             parse_error_message = f"列表解析失败: 响应不是JSON ({exc})"
 
         code = int(payload.get("code") or 0) if payload else 0
         api_message = self._as_str(payload.get("message")) if payload else None
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        records = data.get("records") if isinstance(data.get("records"), list) else []
+        data_raw = payload.get("data")
+        data: dict[str, Any] = data_raw if isinstance(data_raw, dict) else {}
+        records_raw = data.get("records")
+        record_entries: list[object] = records_raw if isinstance(records_raw, list) else []
 
-        page_item_count = len(records)
+        page_item_count = len(record_entries)
         self.list_items_seen += page_item_count
 
         emitted_unique = 0
         page_source_duplicates_skipped = 0
 
         if parse_error_message is None and code == 200:
-            for raw_record in records:
+            for raw_record in record_entries:
                 if not isinstance(raw_record, dict):
                     continue
                 parsed_record = self.parser.parse_list_record(
@@ -189,8 +205,8 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
         current = self._as_int(data.get("current")) if isinstance(data, dict) else page
 
         yield self._build_raw_item(
-            response=response,
-            raw_body=response.text,
+            response=text_response,
+            raw_body=text_response.text,
             raw_url=f"{self.list_api_url}?page={page}&deal_time={self.deal_time}&deal_classify={self.deal_classify}",
             role="list",
             extra_meta={
@@ -218,7 +234,7 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
             stage = "fetch" if parse_error_message.startswith("页面获取失败") else "parse"
             yield self._build_error_item(
                 stage=stage,
-                url=response.url,
+                url=text_response.url,
                 error_type="ListPageError",
                 error_message=parse_error_message,
                 traceback_text="",
@@ -232,19 +248,20 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
         if pages is not None and pages > 0 and page < pages:
             yield self._build_list_request(page=page + 1, list_page_url=list_page_url)
 
-    def parse_detail(self, response: scrapy.http.Response, list_page_url: str, record: dict[str, Any]):
+    def parse_detail(self, response: Response, list_page_url: str, record: dict[str, Any]):
+        text_response = self._require_text_response(response)
         parsed_record = self._deserialize_record(record)
 
         yield self._build_raw_item(
-            response=response,
-            raw_body=response.text,
-            raw_url=response.url,
+            response=text_response,
+            raw_body=text_response.text,
+            raw_url=text_response.url,
             role="detail",
             source_duplicate_key=parsed_record.source_duplicate_key,
             source_list_item_fingerprint=parsed_record.source_list_item_fingerprint,
             extra_meta={
                 "list_page_url": list_page_url,
-                "detail_page_url": response.url,
+                "detail_page_url": text_response.url,
                 "external_id": parsed_record.external_id,
                 "title": parsed_record.title,
                 "province": parsed_record.province,
@@ -255,14 +272,14 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
 
         try:
             parsed_notice = self.parser.parse_detail_notice(
-                response=response,
+                response=text_response,
                 list_record=parsed_record,
                 list_page_url=list_page_url,
             )
         except Exception as exc:  # pragma: no cover - defensive branch
             yield self._build_error_item(
                 stage="parse",
-                url=response.url,
+                url=text_response.url,
                 error_type=exc.__class__.__name__,
                 error_message=f"详情解析失败: {exc}",
                 traceback_text="",
@@ -270,7 +287,7 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
             )
             return
 
-        detail_content_hash = sha256_text(response.text)
+        detail_content_hash = sha256_text(text_response.text)
         dedup_hash = sha256_text(f"{self.source_code}|{parsed_record.source_duplicate_key}")
 
         notice_item = TenderNoticeItem(
@@ -329,12 +346,12 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
             content_text=parsed_notice.content_text,
             structured_data=parsed_notice.structured_data,
             change_summary=parsed_notice.change_summary,
-            raw_document_url_hash=sha256_text(normalize_url(response.url)),
+            raw_document_url_hash=sha256_text(normalize_url(text_response.url)),
         )
         yield version_item
 
         for attachment in parsed_notice.attachments:
-            file_url = normalize_url(response.urljoin(attachment.file_url))
+            file_url = normalize_url(text_response.urljoin(attachment.file_url))
             file_name = attachment.file_name or file_url.rsplit("/", maxsplit=1)[-1] or "attachment"
             yield TenderAttachmentItem(
                 item_type=ITEM_TYPE_TENDER_ATTACHMENT,
@@ -353,11 +370,11 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
                 file_ext=file_name.rsplit(".", maxsplit=1)[-1] if "." in file_name else None,
                 file_size_bytes=attachment.file_size_bytes,
                 published_at=parsed_notice.published_at.isoformat() if parsed_notice.published_at else parsed_record.published_at_iso,
-                source_url=response.url,
+                source_url=text_response.url,
             )
 
-    def _build_list_formdata(self, *, page: int) -> dict[str, str]:
-        formdata = {
+    def _build_list_formdata(self, *, page: int) -> FormData:
+        formdata: FormData = {
             "SOURCE_TYPE": self.source_type,
             "DEAL_TIME": self.deal_time,
             "PAGENUMBER": str(page),
@@ -455,7 +472,7 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
     def _build_raw_item(
         self,
         *,
-        response: scrapy.http.Response,
+        response: TextResponse,
         raw_body: str,
         raw_url: str,
         role: str,
@@ -482,7 +499,7 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
             storage_uri="",
             raw_body=raw_body,
             http_status=response.status,
-            mime_type=response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore"),
+            mime_type=self._decode_header_value(response.headers.get("Content-Type")),
             charset=response.encoding,
             title=title_value,
             content_length=len(raw_body.encode("utf-8")),
@@ -511,6 +528,8 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
         }
 
     def _deserialize_record(self, data: dict[str, Any]) -> GgzyGovCnDealListRecord:
+        raw_list_item = data.get("list_item_raw")
+        list_item_raw = {str(key): value for key, value in raw_list_item.items()} if isinstance(raw_list_item, dict) else {}
         return GgzyGovCnDealListRecord(
             title=str(data.get("title") or ""),
             normalized_title=self._as_str(data.get("normalized_title")),
@@ -527,7 +546,7 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
             source_list_item_fingerprint=self._as_str(data.get("source_list_item_fingerprint"))
             or sha256_text("missing-list-fingerprint"),
             list_item_content_hash=self._as_str(data.get("list_item_content_hash")) or sha256_text("missing-content"),
-            list_item_raw=data.get("list_item_raw") if isinstance(data.get("list_item_raw"), dict) else {},
+            list_item_raw=list_item_raw,
         )
 
     def _parse_optional_positive_int(self, value: Any) -> int | None:

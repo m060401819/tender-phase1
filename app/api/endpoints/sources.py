@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
+    CrawlJobStatus,
+    CrawlJobType,
     CrawlJobListItemResponse,
     SourceCrawlJobTriggerRequest,
     SourceCrawlJobTriggerResponse,
@@ -310,8 +312,8 @@ def trigger_source_crawl_job(
             id=job.id,
             source_site_id=job.source_site_id,
             source_code=source.code,
-            job_type=job.job_type,
-            status=job.status,
+            job_type=_to_crawl_job_type(job.job_type),
+            status=_to_crawl_job_status(job.status),
             retry_of_job_id=job.retry_of_job_id,
             retry_of_job_message=None,
             retried_by_job_id=None,
@@ -340,3 +342,11 @@ def trigger_source_crawl_job(
             message=job.message,
         ),
     )
+
+
+def _to_crawl_job_type(value: str) -> CrawlJobType:
+    return CrawlJobType(value)
+
+
+def _to_crawl_job_status(value: str) -> CrawlJobStatus:
+    return CrawlJobStatus(value)

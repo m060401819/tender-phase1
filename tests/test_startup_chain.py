@@ -11,7 +11,8 @@ def test_dev_up_script_contains_one_click_startup_chain() -> None:
     assert "source \"$PROJECT_ROOT/.venv/bin/activate\"" in content
     assert "docker compose up -d postgres" in content
     assert "alembic upgrade head" in content
-    assert "uvicorn app.main:app --host 0.0.0.0 --port 8000" in content
+    assert 'APP_HOST="${APP_HOST:-127.0.0.1}"' in content
+    assert 'uvicorn app.main:app --host "$APP_HOST" --port 8000' in content
     assert "dev_web.log" in content
     assert "http://127.0.0.1:8000/admin/home" in content
     assert "http://127.0.0.1:8000/docs" in content
@@ -35,7 +36,8 @@ def test_app_entrypoint_only_waits_and_starts_uvicorn() -> None:
     assert "python scripts/wait_for_db.py" in content
     assert "alembic upgrade head" not in content
     assert "python scripts/seed_sources.py --demo" not in content
-    assert "uvicorn app.main:app --host 0.0.0.0 --port 8000" in content
+    assert 'APP_HOST="${APP_HOST:-127.0.0.1}"' in content
+    assert 'uvicorn app.main:app --host "$APP_HOST" --port 8000' in content
 
 
 def test_migrate_entrypoint_waits_and_runs_alembic() -> None:

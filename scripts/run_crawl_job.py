@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import subprocess
+import re
+# Bandit B404 false positive: this helper intentionally launches Scrapy with validated argv and shell=False.
+import subprocess  # nosec B404
 import sys
 
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -17,11 +19,27 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.core.config import settings as app_settings  # noqa: E402
 from app.models import CrawlError, RawDocument  # noqa: E402
 from app.services import CRAWL_JOB_TYPES, CrawlJobService  # noqa: E402
+from app.services.source_adapter_registry import (  # noqa: E402
+    list_integrated_source_codes,
+    normalize_source_code,
+    resolve_spider_name,
+    supports_job_type,
+)
+
+_SPIDER_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+_SOURCE_CODE_PATTERN = re.compile(r"^[a-z0-9_]+$")
+_SPIDER_ARG_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+_SETTING_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create and run a crawl_job with Scrapy spider")
-    parser.add_argument("--spider", required=True, help="Scrapy spider name")
+    parser.add_argument(
+        "--spider",
+        required=True,
+        choices=sorted({spider for code in list_integrated_source_codes() if (spider := resolve_spider_name(code))}),
+        help="Scrapy spider name",
+    )
     parser.add_argument("--source-code", help="source_site.code; defaults to spider name")
     parser.add_argument("--source-name", help="source_site.name")
     parser.add_argument("--source-url", help="source_site.base_url")
@@ -86,6 +104,58 @@ def parse_key_value_map(items: list[str]) -> dict[str, str]:
     return parsed
 
 
+def validate_key_value_items(items: list[str], *, flag: str, key_pattern: re.Pattern[str]) -> None:
+    for raw in items:
+        if "=" not in raw:
+            raise ValueError(f"{flag} must be KEY=VALUE, got: {raw}")
+        key, value = raw.split("=", maxsplit=1)
+        normalized_key = key.strip()
+        if not normalized_key or not key_pattern.fullmatch(normalized_key):
+            raise ValueError(f"{flag} key contains unsupported characters: {key}")
+        _validate_subprocess_fragment(value, label=f"{flag} value[{normalized_key}]", allow_empty=True)
+
+
+def validate_spider_identity(*, spider: str, source_code: str, job_type: str) -> str:
+    normalized_source_code = normalize_source_code(_validate_subprocess_fragment(source_code, label="source_code"))
+    if not _SOURCE_CODE_PATTERN.fullmatch(normalized_source_code):
+        raise ValueError("source_code contains unsupported characters")
+    expected_spider = resolve_spider_name(normalized_source_code)
+    if expected_spider is None:
+        raise ValueError(f"source_code is not integrated: {normalized_source_code}")
+
+    normalized_spider = _validate_subprocess_fragment(spider, label="spider")
+    if not _SPIDER_NAME_PATTERN.fullmatch(normalized_spider):
+        raise ValueError("spider contains unsupported characters")
+    if normalized_spider != expected_spider:
+        raise ValueError(f"spider/source_code mismatch: source_code={normalized_source_code}, spider={expected_spider}")
+    if job_type != "scheduled" and not supports_job_type(normalized_source_code, job_type=job_type):
+        raise ValueError(f"job_type is not supported for source_code={normalized_source_code}: {job_type}")
+    return normalized_source_code
+
+
+def _validate_subprocess_fragment(value: object, *, label: str, allow_empty: bool = False) -> str:
+    text = str(value).strip()
+    if not text and not allow_empty:
+        raise ValueError(f"{label} must not be empty")
+    if any(char in text for char in ("\x00", "\r", "\n")):
+        raise ValueError(f"{label} contains unsupported control characters")
+    return text
+
+
+def _resolved_python_executable() -> str:
+    return str(Path(sys.executable).resolve())
+
+
+def format_command_for_display(command: list[str]) -> str:
+    redacted: list[str] = []
+    for argument in command:
+        if argument.startswith("CRAWLER_DATABASE_URL="):
+            redacted.append("CRAWLER_DATABASE_URL=<redacted>")
+            continue
+        redacted.append(argument)
+    return " ".join(redacted)
+
+
 def _normalize_iso_date(value: object) -> str | None:
     if value is None:
         return None
@@ -106,7 +176,6 @@ def collect_list_page_stats(*, database_url: str, crawl_job_id: int) -> tuple[in
 
     try:
         with session_factory() as session:
-            session = session  # type: Session
             metas = session.scalars(
                 select(RawDocument.extra_meta).where(RawDocument.crawl_job_id == crawl_job_id)
             ).all()
@@ -234,9 +303,19 @@ def build_scrapy_command(
     spider_args: list[str],
     settings: list[str],
 ) -> list[str]:
-    command = [sys.executable, "-m", "scrapy", "crawl", spider, "-a", f"crawl_job_id={crawl_job_id}"]
+    _validate_subprocess_fragment(spider, label="spider")
+    if not _SPIDER_NAME_PATTERN.fullmatch(spider):
+        raise ValueError("spider contains unsupported characters")
+    if crawl_job_id < 1:
+        raise ValueError("crawl_job_id must be >= 1")
+    _validate_subprocess_fragment(writer_backend, label="writer_backend")
+    if database_url:
+        _validate_subprocess_fragment(database_url, label="database_url")
+
+    command = [_resolved_python_executable(), "-m", "scrapy", "crawl", spider, "-a", f"crawl_job_id={crawl_job_id}"]
 
     for arg in spider_args:
+        _validate_subprocess_fragment(arg, label="spider_arg", allow_empty=True)
         command.extend(["-a", arg])
 
     command.extend(["-s", f"CRAWLER_WRITER_BACKEND={writer_backend}"])
@@ -244,6 +323,7 @@ def build_scrapy_command(
         command.extend(["-s", f"CRAWLER_DATABASE_URL={database_url}"])
 
     for setting in settings:
+        _validate_subprocess_fragment(setting, label="setting", allow_empty=True)
         command.extend(["-s", setting])
 
     return command
@@ -253,6 +333,8 @@ def main() -> int:
     args = parse_args()
     validate_key_value(args.spider_arg, flag="--spider-arg")
     validate_key_value(args.setting, flag="--setting")
+    validate_key_value_items(args.spider_arg, flag="--spider-arg", key_pattern=_SPIDER_ARG_KEY_PATTERN)
+    validate_key_value_items(args.setting, flag="--setting", key_pattern=_SETTING_KEY_PATTERN)
     effective_spider_args = list(args.spider_arg)
     spider_args_map = parse_key_value_map(effective_spider_args)
     if "job_type" not in spider_args_map:
@@ -260,9 +342,14 @@ def main() -> int:
         spider_args_map["job_type"] = args.job_type
 
     database_url = resolve_database_url(args.database_url)
+    _validate_subprocess_fragment(database_url, label="database_url")
     service = CrawlJobService.from_database_url(database_url)
 
-    source_code = (args.source_code or args.spider).strip()
+    source_code = validate_spider_identity(
+        spider=args.spider,
+        source_code=(args.source_code or args.spider).strip(),
+        job_type=args.job_type,
+    )
 
     try:
         job = service.create_job(
@@ -285,9 +372,15 @@ def main() -> int:
         )
 
         print(f"[crawl-job] created job_id={job.id} source_code={source_code} job_type={args.job_type}")
-        print(f"[crawl-job] running command: {' '.join(command)}")
+        print(f"[crawl-job] running command: {format_command_for_display(command)}")
 
-        completed = subprocess.run(command, cwd=PROJECT_ROOT / "crawler", check=False)
+        # Bandit B603 reviewed: command is assembled from validated argv fragments; shell=False.
+        completed = subprocess.run(  # nosec B603
+            command,
+            cwd=PROJECT_ROOT / "crawler",
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
 
         if completed.returncode == 0:
             final = service.finish_job(job.id, status=None, message="scrapy finished")

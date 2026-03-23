@@ -27,6 +27,7 @@ class JsonlErrorWriter(BaseErrorWriter):
     def write_error(self, item: dict) -> None:
         if self._fp is None:
             self.open()
-        assert self._fp is not None
+        if self._fp is None:
+            raise RuntimeError("crawl error writer file handle is not available")
         self._fp.write(json.dumps(item, ensure_ascii=False) + "\n")
         self._fp.flush()

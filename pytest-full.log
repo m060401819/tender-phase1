@@ -1,0 +1,196 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.2, pluggy-1.6.0 -- /home/m060401819/projects/tender-phase1/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/m060401819/projects/tender-phase1
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.12.1
+collecting ... collected 214 items
+
+tests/crawler/test_anhui_ggzy_zfcg_parser.py::test_anhui_parser_extracts_core_fields PASSED [  0%]
+tests/crawler/test_anhui_ggzy_zfcg_parser.py::test_anhui_parser_infers_result_notice_type PASSED [  0%]
+tests/crawler/test_anhui_ggzy_zfcg_parser.py::test_anhui_parser_dedupes_attachment_urls_by_normalized_form PASSED [  1%]
+tests/crawler/test_anhui_ggzy_zfcg_spider.py::test_anhui_spider_runs_list_detail_sub_chain 
+-------------------------------- live log call ---------------------------------
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=1 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1 page_state=max_page_no=1,has_next_control=False,next_page=None,backfill_year=None page_item_count=1 new_unique_item_count=1
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:228 stop pagination by max_pages: current_page_no=1 max_pages=1
+PASSED                                                                   [  1%]
+tests/crawler/test_anhui_ggzy_zfcg_spider.py::test_anhui_spider_emits_crawl_error_when_guid_missing PASSED [  2%]
+tests/crawler/test_anhui_ggzy_zfcg_spider.py::test_anhui_spider_pagination_fetches_until_last_page_with_run_dedup 
+-------------------------------- live log call ---------------------------------
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=1 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1 page_state=max_page_no=3,has_next_control=True,next_page=2,backfill_year=None page_item_count=3 new_unique_item_count=2
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=2 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=2 page_state=max_page_no=3,has_next_control=True,next_page=3,backfill_year=None page_item_count=2 new_unique_item_count=1
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=3 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=3 page_state=max_page_no=3,has_next_control=False,next_page=None,backfill_year=None page_item_count=1 new_unique_item_count=0
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:245 stop pagination by last page: current_page_no=3 max_page_no=3 has_next_control=False
+PASSED                                                                   [  2%]
+tests/crawler/test_anhui_ggzy_zfcg_spider.py::test_anhui_spider_respects_max_pages 
+-------------------------------- live log call ---------------------------------
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=1 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1 page_state=max_page_no=3,has_next_control=True,next_page=2,backfill_year=None page_item_count=1 new_unique_item_count=1
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=2 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=2 page_state=max_page_no=3,has_next_control=True,next_page=3,backfill_year=None page_item_count=1 new_unique_item_count=1
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:228 stop pagination by max_pages: current_page_no=2 max_pages=2
+PASSED                                                                   [  3%]
+tests/crawler/test_anhui_ggzy_zfcg_spider.py::test_anhui_spider_stops_after_consecutive_empty_pages 
+-------------------------------- live log call ---------------------------------
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=1 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1 page_state=max_page_no=9,has_next_control=True,next_page=2,backfill_year=None page_item_count=1 new_unique_item_count=1
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=2 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=2 page_state=max_page_no=9,has_next_control=True,next_page=3,backfill_year=None page_item_count=1 new_unique_item_count=0
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=3 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1&currentPage=3 page_state=max_page_no=9,has_next_control=True,next_page=4,backfill_year=None page_item_count=1 new_unique_item_count=0
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:236 stop pagination by consecutive no-new pages: current_page_no=3 consecutive_no_new_pages=2 threshold=2
+PASSED                                                                   [  3%]
+tests/crawler/test_anhui_ggzy_zfcg_spider.py::test_anhui_spider_backfill_stops_when_page_all_older_than_year 
+-------------------------------- live log call ---------------------------------
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=120 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=&currentPage=120 page_state=max_page_no=120,has_next_control=True,next_page=121,backfill_year=2026 page_item_count=2 new_unique_item_count=0
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:220 stop pagination by backfill boundary: current_page_no=120 backfill_start=2026-01-01
+PASSED                                                                   [  4%]
+tests/crawler/test_anhui_ggzy_zfcg_spider.py::test_anhui_spider_backfill_stops_on_empty_list_page 
+-------------------------------- live log call ---------------------------------
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:174 list pagination: current_page_no=5 page_url=https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=&currentPage=5 page_state=max_page_no=5,has_next_control=True,next_page=6,backfill_year=2026 page_item_count=0 new_unique_item_count=0
+INFO     anhui_ggzy_zfcg:anhui_ggzy_zfcg_spider.py:213 stop pagination by empty list page: current_page_no=5
+PASSED                                                                   [  4%]
+tests/crawler/test_attachment_archiver.py::test_noop_attachment_archiver_returns_existing_fields PASSED [  5%]
+tests/crawler/test_attachment_archiver.py::test_local_attachment_archiver_downloads_and_archives_file PASSED [  5%]
+tests/crawler/test_connectors_and_writers.py::test_playwright_fallback_uses_primary_html_when_available PASSED [  6%]
+tests/crawler/test_connectors_and_writers.py::test_playwright_fallback_uses_connector_when_primary_empty PASSED [  6%]
+tests/crawler/test_connectors_and_writers.py::test_writer_factory_can_build_noop_bundle PASSED [  7%]
+tests/crawler/test_connectors_and_writers.py::test_writer_factory_can_build_sqlalchemy_bundle PASSED [  7%]
+tests/crawler/test_deduplication_service.py::test_service_normalizes_url_and_hash PASSED [  7%]
+tests/crawler/test_deduplication_service.py::test_service_builds_notice_identity_with_merge_priority PASSED [  8%]
+tests/crawler/test_deduplication_service.py::test_service_normalizes_notice_type PASSED [  8%]
+tests/crawler/test_deduplication_service.py::test_service_builds_source_list_fingerprint_with_normalization PASSED [  9%]
+tests/crawler/test_deduplication_service.py::test_service_builds_source_duplicate_key_by_notice_identity_fields PASSED [  9%]
+tests/crawler/test_deduplication_service.py::test_service_builds_source_duplicate_key_prefers_detail_locator_even_when_title_changes PASSED [ 10%]
+tests/crawler/test_deduplication_service.py::test_service_builds_dedup_key_with_budget_bucket_and_detail_locator PASSED [ 10%]
+tests/crawler/test_deduplication_service.py::test_service_builds_persistence_dedup_key_for_business_similarity PASSED [ 11%]
+tests/crawler/test_deduplication_service.py::test_extract_detail_locator_prefers_guid_or_detail_id PASSED [ 11%]
+tests/crawler/test_example_spider.py::test_example_spider_emits_core_item_types PASSED [ 12%]
+tests/crawler/test_ggzy_gov_cn_deal_parser.py::test_ggzy_parser_extracts_required_list_fields PASSED [ 12%]
+tests/crawler/test_ggzy_gov_cn_deal_parser.py::test_ggzy_parser_fallback_dedup_key_uses_normalized_title PASSED [ 13%]
+tests/crawler/test_ggzy_gov_cn_deal_parser.py::test_ggzy_parser_detail_extracts_text_and_attachments PASSED [ 13%]
+tests/crawler/test_ggzy_gov_cn_deal_spider.py::test_ggzy_spider_landing_and_list_flow_with_run_dedup PASSED [ 14%]
+tests/crawler/test_ggzy_gov_cn_deal_spider.py::test_ggzy_spider_reports_captcha_error PASSED [ 14%]
+tests/crawler/test_parser_base.py::test_base_parser_extracts_title_summary_and_attachments PASSED [ 14%]
+tests/crawler/test_pipelines.py::test_raw_archive_pipeline_persists_files PASSED [ 15%]
+tests/crawler/test_pipelines.py::test_attachment_archive_pipeline_enriches_attachment_metadata PASSED [ 15%]
+tests/crawler/test_pipelines.py::test_writer_dispatch_pipeline_routes_by_item_type PASSED [ 16%]
+tests/crawler/test_sqlalchemy_writer.py::test_sqlalchemy_writers_persist_phase1_entities PASSED [ 16%]
+tests/crawler/test_sqlalchemy_writer.py::test_raw_document_url_hash_dedup_by_normalized_url PASSED [ 17%]
+tests/crawler/test_sqlalchemy_writer.py::test_raw_document_content_hash_dedup_marks_duplicate PASSED [ 17%]
+tests/crawler/test_sqlalchemy_writer.py::test_notice_versioning_dedup_and_increment PASSED [ 18%]
+tests/crawler/test_sqlalchemy_writer.py::test_notice_merge_strategy_by_detail_url_without_external_id PASSED [ 18%]
+tests/crawler/test_sqlalchemy_writer.py::test_source_duplicate_suppression_and_version_update_boundary PASSED [ 19%]
+tests/crawler/test_sqlalchemy_writer.py::test_notice_persistence_dedup_merges_high_similarity_across_different_detail_urls PASSED [ 19%]
+tests/crawler/test_sqlalchemy_writer.py::test_attachment_url_normalization_and_dedup PASSED [ 20%]
+tests/crawler/test_sqlalchemy_writer.py::test_attachment_uses_current_notice_version_when_version_no_missing PASSED [ 20%]
+tests/crawler/test_sqlalchemy_writer.py::test_attachment_links_raw_document_by_url_hash PASSED [ 21%]
+tests/crawler/test_sqlalchemy_writer.py::test_sqlalchemy_writer_updates_crawl_job_metrics PASSED [ 21%]
+tests/test_admin_csrf.py::test_admin_post_rejects_missing_csrf_token_and_logs_event 
+-------------------------------- live log call ---------------------------------
+WARNING  app.main:main.py:74 admin csrf validation failed
+PASSED                                                                   [ 21%]
+tests/test_admin_csrf.py::test_admin_post_rejects_wrong_csrf_token 
+-------------------------------- live log call ---------------------------------
+WARNING  app.main:main.py:74 admin csrf validation failed
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/admin/sources/anhui_ggzy_zfcg/crawl-jobs "HTTP/1.1 403 Forbidden"
+PASSED                                                                   [ 22%]
+tests/test_admin_csrf.py::test_admin_post_accepts_valid_csrf_token 
+-------------------------------- live log call ---------------------------------
+INFO     app.services.source_crawl_trigger_service:source_crawl_trigger_service.py:638 crawl job enqueued
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/admin/sources/anhui_ggzy_zfcg/crawl-jobs "HTTP/1.1 303 See Other"
+PASSED                                                                   [ 22%]
+tests/test_admin_csrf.py::test_role_checks_and_csrf_are_enforced_together 
+-------------------------------- live log call ---------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/admin/sources/anhui_ggzy_zfcg/crawl-jobs "HTTP/1.1 403 Forbidden"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/admin/settings/health-rules "HTTP/1.1 403 Forbidden"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/admin/settings/health-rules "HTTP/1.1 303 See Other"
+PASSED                                                                   [ 23%]
+tests/test_admin_e2e_playwright.py::test_source_sites_manual_crawl_e2e_redirects_and_refreshes_status SKIPPED [ 23%]
+tests/test_admin_e2e_playwright.py::test_source_detail_schedule_config_e2e_updates_and_persists SKIPPED [ 24%]
+tests/test_admin_e2e_playwright.py::test_crawl_jobs_retry_e2e_disables_button_and_creates_retry_job SKIPPED [ 24%]
+tests/test_admin_e2e_playwright.py::test_source_sites_manual_crawl_e2e_shows_error_for_inactive_source SKIPPED [ 25%]
+tests/test_admin_runtime_regression.py::test_admin_core_pages_open_with_empty_data 
+-------------------------------- live log call ---------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/admin/home "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/admin/source-sites "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/admin/notices "HTTP/1.1 200 OK"
+PASSED                                                                   [ 25%]
+tests/test_admin_runtime_regression.py::test_admin_home_empty_data_shows_defaults 
+-------------------------------- live log call ---------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/admin/home "HTTP/1.1 200 OK"
+PASSED                                                                   [ 26%]
+tests/test_admin_runtime_regression.py::test_admin_core_pages_open_with_minimal_data 
+-------------------------------- live log call ---------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/admin/home "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/admin/source-sites "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/admin/notices "HTTP/1.1 200 OK"
+PASSED                                                                   [ 26%]
+tests/test_admin_runtime_regression.py::test_admin_home_fallbacks_to_defaults_when_stats_query_fails 
+-------------------------------- live log call ---------------------------------
+ERROR    app.api.endpoints.admin_dashboard:admin_dashboard.py:126 dashboard stats query failed; fallback to defaults
+Traceback (most recent call last):
+  File "/home/m060401819/projects/tender-phase1/app/api/endpoints/admin_dashboard.py", line 122, in _load_dashboard_payload
+    payload = StatsService(repository=StatsRepository(db)).get_overview()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/m060401819/projects/tender-phase1/tests/test_admin_runtime_regression.py", line 162, in _raise_sql_error
+    raise SQLAlchemyError("forced stats error")
+sqlalchemy.exc.SQLAlchemyError: forced stats error
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/admin/home "HTTP/1.1 200 OK"
+PASSED                                                                   [ 27%]
+tests/test_alembic_migrations.py::test_alembic_upgrade_head_smoke[sqlite] PASSED [ 27%]
+tests/test_alembic_migrations.py::test_migration_20260322_0009_preserves_rows_and_adds_lease_columns[sqlite] PASSED [ 28%]
+tests/test_alembic_migrations.py::test_migration_20260322_0010_backfills_queue_timestamps[sqlite] PASSED [ 28%]
+tests/test_alembic_migrations.py::test_migration_20260322_0011_collapses_duplicate_active_jobs_and_enforces_mutex[sqlite] PASSED [ 28%]
+tests/test_app_lifespan.py::test_app_lifespan_skips_scheduler_when_embedded_mode_disabled PASSED [ 29%]
+tests/test_app_lifespan.py::test_app_lifespan_initializes_and_shutdowns_scheduler_when_embedded_enabled PASSED [ 29%]
+tests/test_app_lifespan.py::test_app_lifespan_logs_structured_error_when_scheduler_startup_fails FAILED [ 30%]
+
+=================================== FAILURES ===================================
+_____ test_app_lifespan_logs_structured_error_when_scheduler_startup_fails _____
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7caf5db83aa0>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7caf5da161e0>
+
+    def test_app_lifespan_logs_structured_error_when_scheduler_startup_fails(monkeypatch, caplog) -> None:
+        calls = {"shutdown": 0}
+    
+        class StubRuntime:
+            def start(self) -> None:
+                raise RuntimeError("scheduler boom")
+    
+        def fake_initialize(database_url: str, *, refresh_interval_seconds: int) -> StubRuntime:
+            assert isinstance(database_url, str)
+            assert isinstance(refresh_interval_seconds, int)
+            return StubRuntime()
+    
+        def fake_shutdown() -> None:
+            calls["shutdown"] += 1
+    
+        monkeypatch.setattr(main_module.settings, "source_scheduler_embedded_enabled", True, raising=False)
+        monkeypatch.setattr(main_module, "initialize_source_schedule_runtime", fake_initialize)
+        monkeypatch.setattr(main_module, "shutdown_source_schedule_runtime", fake_shutdown)
+    
+        app = main_module.create_app()
+        with caplog.at_level(logging.INFO):
+            with TestClient(app) as client:
+                response = client.get("/healthz")
+                assert response.status_code == 200
+    
+>       startup_error = next(
+            record for record in caplog.records if getattr(record, "event", "") == "source_scheduler_startup_skipped"
+        )
+E       StopIteration
+
+tests/test_app_lifespan.py:100: StopIteration
+=============================== warnings summary ===============================
+tests/test_alembic_migrations.py::test_migration_20260322_0011_collapses_duplicate_active_jobs_and_enforces_mutex[sqlite]
+tests/test_alembic_migrations.py::test_migration_20260322_0011_collapses_duplicate_active_jobs_and_enforces_mutex[sqlite]
+tests/test_alembic_migrations.py::test_migration_20260322_0011_collapses_duplicate_active_jobs_and_enforces_mutex[sqlite]
+tests/test_alembic_migrations.py::test_migration_20260322_0011_collapses_duplicate_active_jobs_and_enforces_mutex[sqlite]
+tests/test_alembic_migrations.py::test_migration_20260322_0011_collapses_duplicate_active_jobs_and_enforces_mutex[sqlite]
+tests/test_alembic_migrations.py::test_migration_20260322_0011_collapses_duplicate_active_jobs_and_enforces_mutex[sqlite]
+  /home/m060401819/projects/tender-phase1/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py:952: DeprecationWarning: The default datetime adapter is deprecated as of Python 3.12; see the sqlite3 documentation for suggested replacement recipes
+    cursor.execute(statement, parameters)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_app_lifespan.py::test_app_lifespan_logs_structured_error_when_scheduler_startup_fails
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+============= 1 failed, 60 passed, 4 skipped, 6 warnings in 16.24s =============

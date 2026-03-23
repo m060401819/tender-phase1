@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -16,6 +17,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.crawl_job import CrawlJob
+    from app.models.raw_document import RawDocument
+    from app.models.source_site import SourceSite
 
 
 class CrawlError(TimestampMixin, Base):
@@ -58,6 +64,6 @@ class CrawlError(TimestampMixin, Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
-    source_site: Mapped["SourceSite"] = relationship(back_populates="crawl_errors")
-    crawl_job: Mapped["CrawlJob | None"] = relationship(back_populates="crawl_errors")
-    raw_document: Mapped["RawDocument | None"] = relationship(back_populates="crawl_errors")
+    source_site: Mapped[SourceSite] = relationship(back_populates="crawl_errors")
+    crawl_job: Mapped[CrawlJob | None] = relationship(back_populates="crawl_errors")
+    raw_document: Mapped[RawDocument | None] = relationship(back_populates="crawl_errors")

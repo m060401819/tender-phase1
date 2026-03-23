@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -35,29 +36,31 @@ class HealthRuleService:
         model = self._ensure_config()
         return self._to_snapshot(model)
 
-    def update_rules(self, updates: dict[str, object]) -> HealthRuleSnapshot:
+    def update_rules(self, updates: Mapping[str, object]) -> HealthRuleSnapshot:
         model = self._ensure_config()
-        candidate = {
-            "recent_error_warning_threshold": int(model.recent_error_warning_threshold),
-            "recent_error_critical_threshold": int(model.recent_error_critical_threshold),
-            "consecutive_failure_warning_threshold": int(model.consecutive_failure_warning_threshold),
-            "consecutive_failure_critical_threshold": int(model.consecutive_failure_critical_threshold),
-            "partial_warning_enabled": bool(model.partial_warning_enabled),
-        }
+        candidate = self._to_snapshot(model)
         for key, value in updates.items():
-            if key not in candidate:
-                continue
             if key == "partial_warning_enabled":
-                candidate[key] = bool(value)
+                candidate.partial_warning_enabled = bool(value)
                 continue
-            candidate[key] = int(value)
+            if key == "recent_error_warning_threshold":
+                candidate.recent_error_warning_threshold = _coerce_int_value(value)
+                continue
+            if key == "recent_error_critical_threshold":
+                candidate.recent_error_critical_threshold = _coerce_int_value(value)
+                continue
+            if key == "consecutive_failure_warning_threshold":
+                candidate.consecutive_failure_warning_threshold = _coerce_int_value(value)
+                continue
+            if key == "consecutive_failure_critical_threshold":
+                candidate.consecutive_failure_critical_threshold = _coerce_int_value(value)
         self._validate_rules(candidate)
 
-        model.recent_error_warning_threshold = candidate["recent_error_warning_threshold"]
-        model.recent_error_critical_threshold = candidate["recent_error_critical_threshold"]
-        model.consecutive_failure_warning_threshold = candidate["consecutive_failure_warning_threshold"]
-        model.consecutive_failure_critical_threshold = candidate["consecutive_failure_critical_threshold"]
-        model.partial_warning_enabled = candidate["partial_warning_enabled"]
+        model.recent_error_warning_threshold = candidate.recent_error_warning_threshold
+        model.recent_error_critical_threshold = candidate.recent_error_critical_threshold
+        model.consecutive_failure_warning_threshold = candidate.consecutive_failure_warning_threshold
+        model.consecutive_failure_critical_threshold = candidate.consecutive_failure_critical_threshold
+        model.partial_warning_enabled = candidate.partial_warning_enabled
         self.session.add(model)
         self.session.commit()
         self.session.refresh(model)
@@ -71,21 +74,21 @@ class HealthRuleService:
         recent_7d_error_count: int,
         consecutive_failure_count: int,
     ) -> str:
-        if recent_7d_error_count >= int(rules.recent_error_critical_threshold):
+        if recent_7d_error_count >= rules.recent_error_critical_threshold:
             return "critical"
-        if consecutive_failure_count >= int(rules.consecutive_failure_critical_threshold):
+        if consecutive_failure_count >= rules.consecutive_failure_critical_threshold:
             return "critical"
         if latest_status == "failed" and consecutive_failure_count >= 1:
-            if int(rules.consecutive_failure_critical_threshold) <= 1:
+            if rules.consecutive_failure_critical_threshold <= 1:
                 return "critical"
             return "warning"
 
-        if recent_7d_error_count >= int(rules.recent_error_warning_threshold):
+        if recent_7d_error_count >= rules.recent_error_warning_threshold:
             return "warning"
-        if consecutive_failure_count >= int(rules.consecutive_failure_warning_threshold):
+        if consecutive_failure_count >= rules.consecutive_failure_warning_threshold:
             return "warning"
         if latest_status == "partial":
-            return "warning" if bool(rules.partial_warning_enabled) else "normal"
+            return "warning" if rules.partial_warning_enabled else "normal"
         if latest_status == "succeeded":
             return "normal"
         return "warning"
@@ -108,23 +111,19 @@ class HealthRuleService:
         return model
 
     @staticmethod
-    def _validate_rules(candidate: dict[str, object]) -> None:
-        int_keys = [
-            "recent_error_warning_threshold",
-            "recent_error_critical_threshold",
-            "consecutive_failure_warning_threshold",
-            "consecutive_failure_critical_threshold",
-        ]
-        for key in int_keys:
-            value = int(candidate[key])
-            if value < 0:
-                raise ValueError(f"{key} must be >= 0")
+    def _validate_rules(candidate: HealthRuleSnapshot) -> None:
+        if candidate.recent_error_warning_threshold < 0:
+            raise ValueError("recent_error_warning_threshold must be >= 0")
+        if candidate.recent_error_critical_threshold < 0:
+            raise ValueError("recent_error_critical_threshold must be >= 0")
+        if candidate.consecutive_failure_warning_threshold < 0:
+            raise ValueError("consecutive_failure_warning_threshold must be >= 0")
+        if candidate.consecutive_failure_critical_threshold < 0:
+            raise ValueError("consecutive_failure_critical_threshold must be >= 0")
 
-        if int(candidate["recent_error_warning_threshold"]) > int(candidate["recent_error_critical_threshold"]):
+        if candidate.recent_error_warning_threshold > candidate.recent_error_critical_threshold:
             raise ValueError("recent_error_warning_threshold cannot be greater than recent_error_critical_threshold")
-        if int(candidate["consecutive_failure_warning_threshold"]) > int(
-            candidate["consecutive_failure_critical_threshold"]
-        ):
+        if candidate.consecutive_failure_warning_threshold > candidate.consecutive_failure_critical_threshold:
             raise ValueError(
                 "consecutive_failure_warning_threshold cannot be greater than consecutive_failure_critical_threshold"
             )
@@ -138,3 +137,17 @@ class HealthRuleService:
             consecutive_failure_critical_threshold=int(model.consecutive_failure_critical_threshold),
             partial_warning_enabled=bool(model.partial_warning_enabled),
         )
+
+
+def _coerce_int_value(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        return int(value.strip())
+    if isinstance(value, (bytes, bytearray)):
+        return int(value)
+    raise TypeError(f"cannot coerce {type(value).__name__} to int")

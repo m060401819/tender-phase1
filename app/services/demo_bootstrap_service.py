@@ -155,7 +155,7 @@ def bootstrap_demo_sources(session: Session) -> list[SourceSite]:
     return saved
 
 
-def _model_create_kwargs(session: Session, model_cls: type) -> dict[str, int]:
+def _model_create_kwargs(session: Session, model_cls: type[SourceSite]) -> dict[str, int]:
     bind = session.get_bind()
     if bind is None or bind.dialect.name != "sqlite":
         return {}

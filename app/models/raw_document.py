@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     JSON,
@@ -19,6 +20,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.crawl_error import CrawlError
+    from app.models.crawl_job import CrawlJob
+    from app.models.notice_version import NoticeVersion
+    from app.models.source_site import SourceSite
+    from app.models.tender_attachment import TenderAttachment
 
 
 class RawDocument(TimestampMixin, Base):
@@ -74,8 +82,8 @@ class RawDocument(TimestampMixin, Base):
     )
     extra_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    source_site: Mapped["SourceSite"] = relationship(back_populates="raw_documents")
-    crawl_job: Mapped["CrawlJob | None"] = relationship(back_populates="raw_documents")
-    notice_versions: Mapped[list["NoticeVersion"]] = relationship(back_populates="raw_document")
-    attachments: Mapped[list["TenderAttachment"]] = relationship(back_populates="raw_document")
-    crawl_errors: Mapped[list["CrawlError"]] = relationship(back_populates="raw_document")
+    source_site: Mapped[SourceSite] = relationship(back_populates="raw_documents")
+    crawl_job: Mapped[CrawlJob | None] = relationship(back_populates="raw_documents")
+    notice_versions: Mapped[list[NoticeVersion]] = relationship(back_populates="raw_document")
+    attachments: Mapped[list[TenderAttachment]] = relationship(back_populates="raw_document")
+    crawl_errors: Mapped[list[CrawlError]] = relationship(back_populates="raw_document")

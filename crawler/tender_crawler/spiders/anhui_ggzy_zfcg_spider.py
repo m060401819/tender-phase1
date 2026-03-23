@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import re
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from parsel import Selector
 import scrapy
+from scrapy.http import Response, TextResponse
 
 from tender_crawler.items import (
     ITEM_TYPE_NOTICE_VERSION,
@@ -24,6 +27,8 @@ from tender_crawler.spiders.base_source_spider import BaseSourceSpider
 from tender_crawler.utils import normalize_url, sha256_text
 
 DEDUP_SERVICE = DeduplicationService()
+FormDataValue = str | Iterable[str]
+FormData = dict[str, FormDataValue]
 
 
 @dataclass(slots=True)
@@ -45,7 +50,8 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
     allowed_domains = ["ggzy.ah.gov.cn"]
     start_urls = ["https://ggzy.ah.gov.cn/zfcg/list?bulletinNature=1&time=1"]
 
-    parser_cls = AnhuiGgzyZfcgParser
+    parser_cls: type[AnhuiGgzyZfcgParser] = AnhuiGgzyZfcgParser
+    parser: AnhuiGgzyZfcgParser
 
     sub_detail_url = "https://ggzy.ah.gov.cn/zfcg/newDetailSub"
 
@@ -65,7 +71,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
 
         self.max_pages = self._parse_optional_positive_int(max_pages)
         self.bulletin_nature = str(bulletin_nature)
-        self.backfill_year = int(backfill_year) if self._as_str(backfill_year) is not None else None
+        self.backfill_year = self._parse_optional_positive_int(backfill_year)
         self.backfill_start_date = (
             date(self.backfill_year, 1, 1)
             if self.backfill_year is not None
@@ -74,8 +80,9 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         self.time_filter = self._resolve_time_filter(raw_time=time, backfill_year=self.backfill_year)
 
         threshold = stop_after_consecutive_no_new_pages
-        if self._as_str(stop_after_consecutive_empty_pages) is not None:
-            threshold = int(stop_after_consecutive_empty_pages)
+        threshold_override = self._parse_optional_positive_int(stop_after_consecutive_empty_pages)
+        if threshold_override is not None:
+            threshold = threshold_override
         self.stop_after_consecutive_no_new_pages = max(1, int(threshold))
         self.dedup_within_run = self._as_bool(dedup_within_run, default=True)
 
@@ -92,26 +99,27 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         self._first_publish_date_seen: date | None = None
         self._last_publish_date_seen: date | None = None
 
-    def parse(self, response: scrapy.http.Response):
-        current_page = self._current_page(response)
-        max_page_no = self._max_page_no(response)
+    def parse(self, response: Response):
+        text_response = self._require_text_response(response)
+        current_page = self._current_page(text_response)
+        max_page_no = self._max_page_no(text_response)
 
         if current_page in self._seen_list_pages:
             self.logger.warning(
                 "list page repeated; stop to avoid loop: current_page_no=%s page_url=%s",
                 current_page,
-                response.url,
+                text_response.url,
             )
             return
         self._seen_list_pages.add(current_page)
         self.pages_scraped += 1
 
         try:
-            list_items = self._extract_list_items(response)
+            list_items = self._extract_list_items(text_response)
         except Exception as exc:  # pragma: no cover - defensive branch
             yield self._build_error_item(
                 stage="parse",
-                url=response.url,
+                url=text_response.url,
                 error_type=exc.__class__.__name__,
                 error_message=f"parse list failed: {exc}",
                 traceback_text="",
@@ -147,7 +155,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
                     callback=self.parse_detail,
                     errback=self.handle_request_error,
                     cb_kwargs={
-                        "list_page_url": response.url,
+                        "list_page_url": text_response.url,
                         "list_item_title": candidate.title,
                         "list_item_published_at": candidate.published_at,
                         "list_item_region": candidate.region,
@@ -165,7 +173,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         else:
             self._consecutive_no_new_pages = 0
 
-        next_page = self._next_page_no(response=response, current_page=current_page)
+        next_page = self._next_page_no(response=text_response, current_page=current_page)
         has_next_control = next_page is not None
         page_state = (
             f"max_page_no={max_page_no},has_next_control={has_next_control},next_page={next_page},"
@@ -174,7 +182,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         self.logger.info(
             "list pagination: current_page_no=%s page_url=%s page_state=%s page_item_count=%s new_unique_item_count=%s",
             current_page,
-            response.url,
+            text_response.url,
             page_state,
             page_item_count,
             new_unique_item_count,
@@ -183,12 +191,12 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         first_publish_date_seen = self._first_publish_date_seen.isoformat() if self._first_publish_date_seen else None
         last_publish_date_seen = self._last_publish_date_seen.isoformat() if self._last_publish_date_seen else None
         yield self._build_raw_item(
-            response=response,
-            raw_html=response.text,
-            raw_url=response.url,
+            response=text_response,
+            raw_html=text_response.text,
+            raw_url=text_response.url,
             role="list",
             extra_meta={
-                "list_page_url": response.url,
+                "list_page_url": text_response.url,
                 "current_page": current_page,
                 "max_page_no": max_page_no,
                 "pages_scraped_total": self.pages_scraped,
@@ -251,7 +259,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
             return
 
         yield scrapy.FormRequest(
-            url=response.urljoin("/zfcg/list"),
+            url=text_response.urljoin("/zfcg/list"),
             formdata=self._build_list_formdata(next_page),
             callback=self.parse,
             errback=self.handle_request_error,
@@ -260,7 +268,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
 
     def parse_detail(
         self,
-        response: scrapy.http.Response,
+        response: Response,
         list_page_url: str,
         list_item_title: str,
         list_item_published_at: str | None = None,
@@ -269,11 +277,12 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         source_list_item_fingerprint: str | None = None,
         list_source_duplicate_key: str | None = None,
     ):
-        guid = self._extract_guid(response.url)
+        text_response = self._require_text_response(response)
+        guid = self._extract_guid(text_response.url)
         if not guid:
             yield self._build_error_item(
                 stage="parse",
-                url=response.url,
+                url=text_response.url,
                 error_type="MissingGuid",
                 error_message="detail url missing guid query parameter",
                 traceback_text="",
@@ -282,15 +291,15 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
             return
 
         yield self._build_raw_item(
-            response=response,
-            raw_html=response.text,
-            raw_url=response.url,
+            response=text_response,
+            raw_html=text_response.text,
+            raw_url=text_response.url,
             role="detail",
             source_duplicate_key=list_source_duplicate_key,
             source_list_item_fingerprint=source_list_item_fingerprint,
             extra_meta={
                 "list_page_url": list_page_url,
-                "detail_page_url": response.url,
+                "detail_page_url": text_response.url,
                 "guid": guid,
                 "list_item_title": list_item_title,
                 "published_at": list_item_published_at,
@@ -311,8 +320,8 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
             errback=self.handle_request_error,
             cb_kwargs={
                 "guid": guid,
-                "detail_url": response.url,
-                "detail_html": response.text,
+                "detail_url": text_response.url,
+                "detail_html": text_response.text,
                 "list_page_url": list_page_url,
                 "list_item_title": list_item_title,
                 "list_item_published_at": list_item_published_at,
@@ -325,7 +334,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
 
     def parse_xmdj(
         self,
-        response: scrapy.http.Response,
+        response: Response,
         guid: str,
         detail_url: str,
         detail_html: str,
@@ -337,10 +346,11 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         source_list_item_fingerprint: str | None = None,
         list_source_duplicate_key: str | None = None,
     ):
+        text_response = self._require_text_response(response)
         xmdj_url = f"{detail_url}&subType=xmdj"
         yield self._build_raw_item(
-            response=response,
-            raw_html=response.text,
+            response=text_response,
+            raw_html=text_response.text,
             raw_url=xmdj_url,
             role="detail_sub_xmdj",
             source_duplicate_key=list_source_duplicate_key,
@@ -366,7 +376,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
                 "guid": guid,
                 "detail_url": detail_url,
                 "detail_html": detail_html,
-                "xmdj_html": response.text,
+                "xmdj_html": text_response.text,
                 "list_page_url": list_page_url,
                 "list_item_title": list_item_title,
                 "list_item_published_at": list_item_published_at,
@@ -379,7 +389,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
 
     def parse_bulletin(
         self,
-        response: scrapy.http.Response,
+        response: Response,
         guid: str,
         detail_url: str,
         detail_html: str,
@@ -392,10 +402,11 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         source_list_item_fingerprint: str | None = None,
         list_source_duplicate_key: str | None = None,
     ):
+        text_response = self._require_text_response(response)
         bulletin_url = f"{detail_url}&subType=bulletin"
         bulletin_raw_item = self._build_raw_item(
-            response=response,
-            raw_html=response.text,
+            response=text_response,
+            raw_html=text_response.text,
             raw_url=bulletin_url,
             role="detail_sub_bulletin",
             source_duplicate_key=list_source_duplicate_key,
@@ -416,7 +427,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
                 list_item_published_at=list_item_published_at,
                 detail_html=detail_html,
                 xmdj_html=xmdj_html,
-                bulletin_html=response.text,
+                bulletin_html=text_response.text,
             )
         except Exception as exc:  # pragma: no cover - defensive branch
             yield self._build_error_item(
@@ -556,7 +567,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
     def _build_raw_item(
         self,
         *,
-        response: scrapy.http.Response,
+        response: TextResponse,
         raw_html: str,
         raw_url: str,
         role: str,
@@ -578,7 +589,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
             storage_uri="",
             raw_body=raw_html,
             http_status=response.status,
-            mime_type=response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore"),
+            mime_type=self._decode_header_value(response.headers.get("Content-Type")),
             charset=response.encoding,
             title=self._clean_text(response.css("title::text,#title::text").get()) or None,
             content_length=len(raw_html.encode("utf-8")),
@@ -590,7 +601,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
             },
         )
 
-    def _extract_list_items(self, response: scrapy.http.Response) -> list[_ListItemCandidate]:
+    def _extract_list_items(self, response: TextResponse) -> list[_ListItemCandidate]:
         items: list[_ListItemCandidate] = []
         for anchor in response.css("a[href*='/zfcg/newDetail']"):
             href = (anchor.attrib.get("href") or "").strip()
@@ -647,7 +658,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
             )
         return items
 
-    def _extract_anchor_context_text(self, anchor: scrapy.selector.Selector) -> str:
+    def _extract_anchor_context_text(self, anchor: Selector) -> str:
         context_nodes = anchor.xpath("ancestor::*[self::li or self::tr or self::div][1]//text()").getall()
         if not context_nodes:
             context_nodes = anchor.xpath("../..//text()").getall()
@@ -680,7 +691,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
             return "result"
         return "announcement"
 
-    def _next_page_no(self, response: scrapy.http.Response, current_page: int) -> int | None:
+    def _next_page_no(self, response: TextResponse, current_page: int) -> int | None:
         for anchor in response.css(".gcxxfy a"):
             text = self._clean_text(" ".join(anchor.css("::text").getall()))
             if "下一页" not in text:
@@ -731,7 +742,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         total += sign * int(current)
         return total if total > 0 else None
 
-    def _current_page(self, response: scrapy.http.Response) -> int:
+    def _current_page(self, response: TextResponse) -> int:
         raw = response.css(
             "#currentPage::attr(value),input[name='currentPage']::attr(value),#pageNo::attr(value),input[name='pageNo']::attr(value)"
         ).get()
@@ -740,7 +751,7 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
         except ValueError:
             return 1
 
-    def _max_page_no(self, response: scrapy.http.Response) -> int:
+    def _max_page_no(self, response: TextResponse) -> int:
         numbers: list[int] = []
         for text in response.css(".gcxxfy a::text,.gcxxfy span::text").getall():
             stripped = self._clean_text(text)
@@ -770,8 +781,8 @@ class AnhuiGgzyZfcgSpider(BaseSourceSpider):
             query.append(("currentPage", str(page)))
         return f"https://ggzy.ah.gov.cn/zfcg/list?{urlencode(query)}"
 
-    def _build_list_formdata(self, page: int) -> dict[str, str]:
-        formdata = {
+    def _build_list_formdata(self, page: int) -> FormData:
+        formdata: FormData = {
             "currentPage": str(page),
             "bulletinNature": self.bulletin_nature,
         }

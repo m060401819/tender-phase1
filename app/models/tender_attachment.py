@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -17,6 +18,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.notice_version import NoticeVersion
+    from app.models.raw_document import RawDocument
+    from app.models.source_site import SourceSite
+    from app.models.tender_notice import TenderNotice
 
 
 class TenderAttachment(TimestampMixin, Base):
@@ -71,7 +78,7 @@ class TenderAttachment(TimestampMixin, Base):
     downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
-    source_site: Mapped["SourceSite"] = relationship(back_populates="tender_attachments")
-    notice: Mapped["TenderNotice"] = relationship(back_populates="attachments")
-    notice_version: Mapped["NoticeVersion | None"] = relationship(back_populates="attachments")
-    raw_document: Mapped["RawDocument | None"] = relationship(back_populates="attachments")
+    source_site: Mapped[SourceSite] = relationship(back_populates="tender_attachments")
+    notice: Mapped[TenderNotice] = relationship(back_populates="attachments")
+    notice_version: Mapped[NoticeVersion | None] = relationship(back_populates="attachments")
+    raw_document: Mapped[RawDocument | None] = relationship(back_populates="attachments")

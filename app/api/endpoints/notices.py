@@ -22,7 +22,7 @@ from app.api.schemas import (
     RawDocumentSummaryResponse,
 )
 from app.db.session import get_db
-from app.repositories import NoticeListItemRecord, NoticeRepository
+from app.repositories import NoticeListItemRecord, NoticeRepository, NoticeVersionRecord
 from app.services import NoticeQueryService
 
 router = APIRouter(tags=["notices"])
@@ -220,8 +220,10 @@ def export_notices_xlsx(
         "current_version_id",
     ]
     workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "notices"
+    default_sheet = workbook.active
+    sheet = workbook.create_sheet(title="notices")
+    if default_sheet is not None:
+        workbook.remove(default_sheet)
     sheet.append(headers)
     for item in items:
         sheet.append(
@@ -261,7 +263,7 @@ def get_notice_detail(notice_id: int, db: Session = Depends(get_db)) -> NoticeDe
         external_id=item.external_id,
         project_code=item.project_code,
         title=item.title,
-        notice_type=item.notice_type,
+        notice_type=_to_notice_type(item.notice_type),
         issuer=item.issuer,
         region=item.region,
         published_at=item.published_at,
@@ -303,7 +305,7 @@ def get_notice_detail(notice_id: int, db: Session = Depends(get_db)) -> NoticeDe
     )
 
 
-def _to_version_response(item) -> NoticeVersionResponse:  # type: ignore[no-untyped-def]
+def _to_version_response(item: NoticeVersionRecord) -> NoticeVersionResponse:
     return NoticeVersionResponse(
         id=item.id,
         notice_id=item.notice_id,
@@ -312,7 +314,7 @@ def _to_version_response(item) -> NoticeVersionResponse:  # type: ignore[no-unty
         is_current=item.is_current,
         content_hash=item.content_hash,
         title=item.title,
-        notice_type=item.notice_type,
+        notice_type=_to_notice_type(item.notice_type),
         issuer=item.issuer,
         region=item.region,
         published_at=item.published_at,
@@ -372,7 +374,7 @@ def _to_notice_list_item_response(item: NoticeListItemRecord) -> NoticeListItemR
         source_code=item.source_code,
         source_name=item.source_name,
         title=item.title,
-        notice_type=item.notice_type,
+        notice_type=_to_notice_type(item.notice_type),
         issuer=item.issuer,
         region=item.region,
         published_at=item.published_at,
@@ -400,3 +402,7 @@ def _export_json_decimal(value: Decimal | None) -> str | None:
     if value is None:
         return None
     return format(value, "f")
+
+
+def _to_notice_type(value: str) -> NoticeType:
+    return NoticeType(value)

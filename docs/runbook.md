@@ -60,7 +60,7 @@ python -m playwright install chromium
 1. 启动 `postgres`
 2. 等待 Postgres 可连接
 3. 执行 `alembic upgrade head`
-4. 启动 `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+4. 启动 `APP_HOST=${APP_HOST:-127.0.0.1} uvicorn app.main:app --host "$APP_HOST" --port 8000`
 5. 启动独立 scheduler：`python -m app.run_source_scheduler`
 6. 等待 `/healthz` 就绪
 

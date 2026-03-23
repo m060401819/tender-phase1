@@ -22,6 +22,7 @@ services:
     container_name: tender_phase1_app
     environment:
       APP_ENV: dev
+      APP_HOST: 0.0.0.0
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/tender_phase1
       AUTH_BASIC_USERS_JSON: >-
         [{"username":"viewer_user","password":"change-me-viewer","role":"viewer"},{"username":"ops_user","password":"change-me-ops","role":"ops"},{"username":"admin_user","password":"change-me-admin","role":"admin"}]

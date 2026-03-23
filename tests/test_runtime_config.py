@@ -24,6 +24,7 @@ def test_settings_keep_dev_defaults_outside_production(monkeypatch: pytest.Monke
     settings = Settings(_env_file=None)
 
     assert settings.app_env == "dev"
+    assert settings.app_host == "127.0.0.1"
     assert settings.database_url == Settings.DEVELOPMENT_DATABASE_URL
     assert settings.log_level == "INFO"
     assert settings.is_production is False
@@ -93,6 +94,18 @@ def test_admin_auth_secret_signs_admin_csrf_tokens(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(auth_module.settings, "admin_auth_secret", "secret-two")
 
     assert auth_module._is_valid_admin_csrf_token(token=token, username="admin-user") is False
+
+
+def test_dev_fallback_secret_can_be_environmentalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    issued_at = int(time.time())
+    nonce = "stable-dev-fallback"
+
+    monkeypatch.setattr(auth_module.settings, "admin_auth_secret", "", raising=False)
+    monkeypatch.setattr(auth_module.settings, "admin_auth_dev_fallback_secret", "local-dev-secret", raising=False)
+
+    token = auth_module.build_admin_csrf_token(username="admin-user", issued_at=issued_at, nonce=nonce)
+
+    assert auth_module._is_valid_admin_csrf_token(token=token, username="admin-user") is True
 
 
 def test_app_import_refuses_incomplete_production_runtime(tmp_path: Path) -> None:

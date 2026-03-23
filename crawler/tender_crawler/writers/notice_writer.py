@@ -37,20 +37,23 @@ class JsonlNoticeWriter(BaseNoticeWriter):
     def write_notice(self, item: dict) -> None:
         if self._notice_fp is None:
             self.open()
-        assert self._notice_fp is not None
+        if self._notice_fp is None:
+            raise RuntimeError("notice writer file handle is not available")
         self._notice_fp.write(json.dumps(item, ensure_ascii=False) + "\n")
         self._notice_fp.flush()
 
     def write_notice_version(self, item: dict) -> None:
         if self._version_fp is None:
             self.open()
-        assert self._version_fp is not None
+        if self._version_fp is None:
+            raise RuntimeError("notice version writer file handle is not available")
         self._version_fp.write(json.dumps(item, ensure_ascii=False) + "\n")
         self._version_fp.flush()
 
     def write_attachment(self, item: dict) -> None:
         if self._attachment_fp is None:
             self.open()
-        assert self._attachment_fp is not None
+        if self._attachment_fp is None:
+            raise RuntimeError("attachment writer file handle is not available")
         self._attachment_fp.write(json.dumps(item, ensure_ascii=False) + "\n")
         self._attachment_fp.flush()

@@ -8,7 +8,7 @@ import unicodedata
 from typing import Any
 from urllib.parse import parse_qs, urljoin, urlsplit
 
-from scrapy.http import Response
+from scrapy.http import TextResponse
 
 from tender_crawler.parsers.base import BaseNoticeParser, ParsedAttachment, ParsedNotice
 from tender_crawler.services import DeduplicationService
@@ -154,7 +154,7 @@ class GgzyGovCnDealParser(BaseNoticeParser):
     def parse_detail_notice(
         self,
         *,
-        response: Response,
+        response: TextResponse,
         list_record: GgzyGovCnDealListRecord,
         list_page_url: str,
     ) -> ParsedNotice:
@@ -311,7 +311,7 @@ class GgzyGovCnDealParser(BaseNoticeParser):
             return locator
         return None
 
-    def _extract_detail_text(self, response: Response) -> str | None:
+    def _extract_detail_text(self, response: TextResponse) -> str | None:
         candidates = response.css(
             "#zoom *::text, .article *::text, .content *::text, .detail *::text, body *::text"
         ).getall()
@@ -320,7 +320,7 @@ class GgzyGovCnDealParser(BaseNoticeParser):
         merged = re.sub(r"\n{3,}", "\n\n", merged).strip()
         return merged or None
 
-    def _extract_detail_attachments(self, response: Response) -> list[ParsedAttachment]:
+    def _extract_detail_attachments(self, response: TextResponse) -> list[ParsedAttachment]:
         attachments: list[ParsedAttachment] = []
         seen_urls: set[str] = set()
 

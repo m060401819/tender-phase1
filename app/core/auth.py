@@ -25,7 +25,6 @@ ADMIN_CSRF_FORM_FIELD = "csrf_token"
 ADMIN_CSRF_HEADER_NAME = "X-CSRF-Token"
 ADMIN_CSRF_COOKIE_PATH = "/admin"
 ADMIN_CSRF_TTL_SECONDS = 12 * 60 * 60
-DEV_ADMIN_CSRF_SIGNING_SECRET = "dev-admin-csrf-secret"
 
 
 class UserRole(StrEnum):
@@ -298,7 +297,17 @@ def _parse_configured_users(raw_value: str) -> tuple[_ConfiguredAuthUser, ...]:
 def _admin_csrf_signing_secret() -> str:
     # HTTP Basic credentials come from AUTH_BASIC_USERS_JSON.
     # ADMIN_AUTH_SECRET is reserved for signing admin CSRF tokens.
-    return settings.admin_auth_secret or DEV_ADMIN_CSRF_SIGNING_SECRET
+    if settings.admin_auth_secret:
+        return settings.admin_auth_secret
+    if settings.admin_auth_dev_fallback_secret:
+        return settings.admin_auth_dev_fallback_secret
+    return _ephemeral_dev_admin_csrf_signing_secret()
+
+
+@lru_cache(maxsize=1)
+def _ephemeral_dev_admin_csrf_signing_secret() -> str:
+    # Development fallback is process-local and random to avoid shipping a reusable default secret.
+    return secrets.token_urlsafe(32)
 
 
 def _sign_admin_csrf_token(*, username: str, issued_at: int, nonce: str) -> str:

@@ -41,6 +41,8 @@ class NoopAttachmentArchiver(BaseAttachmentArchiver):
 class LocalAttachmentArchiver(BaseAttachmentArchiver):
     """Download attachment files and archive to local filesystem."""
 
+    _ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+
     def __init__(self, *, base_dir: str = "data/attachments", timeout_seconds: float = 20.0) -> None:
         self.base_dir = Path(base_dir)
         self.timeout_seconds = timeout_seconds
@@ -55,8 +57,13 @@ class LocalAttachmentArchiver(BaseAttachmentArchiver):
                 file_size_bytes=_as_int(item.get("file_size_bytes")),
             )
 
+        parsed_url = urlparse(file_url)
+        if parsed_url.scheme.lower() not in self._ALLOWED_URL_SCHEMES:
+            raise ValueError(f"unsupported attachment url scheme: {parsed_url.scheme or '(empty)'}")
+
         request = Request(file_url, headers={"User-Agent": "tender-phase1-crawler/1.0"})
-        with urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310
+        # Bandit B310 reviewed: attachment downloads are restricted to http/https.
+        with urlopen(request, timeout=self.timeout_seconds) as response:  # nosec B310
             payload = response.read()
             mime_type = response.headers.get_content_type() if response.headers else None
 

@@ -28,7 +28,6 @@ class AnhuiGgzyZfcgParser(BaseNoticeParser):
         xmdj_html: str,
         bulletin_html: str,
     ) -> ParsedNotice:
-        detail_sel = Selector(text=detail_html)
         xmdj_sel = Selector(text=xmdj_html)
         bulletin_sel = Selector(text=bulletin_html)
 

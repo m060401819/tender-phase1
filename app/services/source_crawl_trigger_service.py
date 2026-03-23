@@ -4,7 +4,9 @@ from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
-import subprocess
+import re
+# Bandit B404 false positive: crawl workers intentionally use subprocess with validated argv and shell=False.
+import subprocess  # nosec B404
 import sys
 import time
 from typing import Callable, Protocol
@@ -32,6 +34,11 @@ from app.services.crawl_job_service import (
 LOGGER = logging.getLogger(__name__)
 DEFAULT_DISPATCH_RETRY_ATTEMPTS = 3
 DEFAULT_DISPATCH_RETRY_DELAY_SECONDS = 1.0
+_SOURCE_CODE_PATTERN = re.compile(r"^[a-z0-9_]+$")
+_SPIDER_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+_SPIDER_ARG_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+_ALLOWED_DISPATCH_JOB_TYPES = frozenset({"manual", "scheduled", "backfill", "manual_retry"})
+_ALLOWED_SPIDER_ARG_KEYS = frozenset({"job_type", "max_pages", "backfill_year"})
 
 
 class CrawlCommandRunner(Protocol):
@@ -55,7 +62,14 @@ class SubprocessCrawlCommandRunner:
         heartbeat_callback: Callable[[], None] | None = None,
         heartbeat_interval_seconds: int = 30,
     ) -> int:
-        process = subprocess.Popen(command, cwd=cwd)
+        _validate_scrapy_subprocess_command(command)
+        # Bandit B603 reviewed: command prefix and argv fragments are validated; shell=False.
+        process = subprocess.Popen(  # nosec B603
+            command,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+        )
         interval = max(int(heartbeat_interval_seconds), 1)
         while True:
             try:
@@ -130,7 +144,9 @@ class SubprocessCrawlJobDispatcher:
             for attempt in range(1, self.max_dispatch_attempts + 1):
                 try:
                     with log_path.open("ab") as log_file:
-                        subprocess.Popen(
+                        _validate_worker_subprocess_command(command)
+                        # Bandit B603 reviewed: detached worker argv is validated before launch; shell=False.
+                        subprocess.Popen(  # nosec B603
                             command,
                             cwd=project_root,
                             stdin=subprocess.DEVNULL,
@@ -210,8 +226,15 @@ class SubprocessCrawlJobDispatcher:
             crawl_job_service.close()
 
     def _build_command(self, *, request: CrawlJobDispatchRequest, database_url: str) -> list[str]:
+        _validate_source_code_for_subprocess(request.source_code)
+        _validate_job_type_for_subprocess(request.job_type)
+        _validate_database_url_for_subprocess(database_url)
+        if request.max_pages is not None and int(request.max_pages) < 1:
+            raise ValueError("max_pages must be >= 1")
+        if request.backfill_year is not None and int(request.backfill_year) < 2000:
+            raise ValueError("backfill_year must be >= 2000")
         command = [
-            sys.executable,
+            _resolved_python_executable(),
             "-m",
             "app.run_crawl_job",
             "--database-url",
@@ -899,8 +922,11 @@ class SourceCrawlTriggerService:
         return spider_name
 
     def _build_command(self, *, spider: str, crawl_job_id: int, spider_args: dict[str, str]) -> list[str]:
+        _validate_spider_name_for_subprocess(spider)
+        _validate_database_url_for_subprocess(self.database_url)
+        _validate_spider_args_for_subprocess(spider_args)
         command = [
-            sys.executable,
+            _resolved_python_executable(),
             "-m",
             "scrapy",
             "crawl",
@@ -1252,6 +1278,78 @@ def _database_url_for_bind(bind: object) -> str:
     if callable(render_as_string):
         return str(render_as_string(hide_password=False))
     return str(url)
+
+
+def _resolved_python_executable() -> str:
+    return str(Path(sys.executable).resolve())
+
+
+def _validate_subprocess_fragment(value: object, *, label: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} must not be empty")
+    if any(char in text for char in ("\x00", "\r", "\n")):
+        raise ValueError(f"{label} contains unsupported control characters")
+    return text
+
+
+def _validate_database_url_for_subprocess(database_url: str) -> str:
+    return _validate_subprocess_fragment(database_url, label="database_url")
+
+
+def _validate_source_code_for_subprocess(source_code: str) -> str:
+    normalized = _validate_subprocess_fragment(source_code, label="source_code")
+    if not _SOURCE_CODE_PATTERN.fullmatch(normalized):
+        raise ValueError("source_code contains unsupported characters")
+    return normalized
+
+
+def _validate_job_type_for_subprocess(job_type: str) -> str:
+    normalized = _validate_subprocess_fragment(job_type, label="job_type")
+    if normalized not in _ALLOWED_DISPATCH_JOB_TYPES:
+        raise ValueError(f"unsupported job_type for subprocess dispatch: {normalized}")
+    return normalized
+
+
+def _validate_spider_name_for_subprocess(spider: str) -> str:
+    normalized = _validate_subprocess_fragment(spider, label="spider")
+    if not _SPIDER_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError("spider contains unsupported characters")
+    return normalized
+
+
+def _validate_spider_args_for_subprocess(spider_args: dict[str, str]) -> None:
+    for key, value in spider_args.items():
+        normalized_key = _validate_subprocess_fragment(key, label="spider arg key")
+        if not _SPIDER_ARG_KEY_PATTERN.fullmatch(normalized_key):
+            raise ValueError(f"unsupported spider arg key: {normalized_key}")
+        if normalized_key not in _ALLOWED_SPIDER_ARG_KEYS:
+            raise ValueError(f"spider arg is not allowed for subprocess dispatch: {normalized_key}")
+        _validate_subprocess_fragment(value, label=f"spider arg value[{normalized_key}]")
+
+
+def _validate_scrapy_subprocess_command(command: list[str]) -> None:
+    if len(command) < 6:
+        raise ValueError("scrapy command is incomplete")
+    executable = Path(_validate_subprocess_fragment(command[0], label="python executable"))
+    if not executable.is_absolute():
+        raise ValueError("python executable must be absolute")
+    if command[1:4] != ["-m", "scrapy", "crawl"]:
+        raise ValueError("unexpected scrapy command prefix")
+    for argument in command[1:]:
+        _validate_subprocess_fragment(argument, label="scrapy argv")
+
+
+def _validate_worker_subprocess_command(command: list[str]) -> None:
+    if len(command) < 8:
+        raise ValueError("worker command is incomplete")
+    executable = Path(_validate_subprocess_fragment(command[0], label="python executable"))
+    if not executable.is_absolute():
+        raise ValueError("python executable must be absolute")
+    if command[1:3] != ["-m", "app.run_crawl_job"]:
+        raise ValueError("unexpected worker command prefix")
+    for argument in command[3:]:
+        _validate_subprocess_fragment(argument, label="worker argv")
 
 
 def _as_int_or_none(value: object) -> int | None:

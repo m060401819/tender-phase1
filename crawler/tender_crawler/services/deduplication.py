@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from dataclasses import dataclass
@@ -479,23 +480,16 @@ class DeduplicationService:
             raw_body=normalized.get("raw_body"),
         )
         source_duplicate_key = normalized.get("source_duplicate_key")
+        extra_meta = self._as_mapping(normalized.get("extra_meta"))
         if not self._as_str(source_duplicate_key):
             source_duplicate_key = self.build_source_duplicate_key(
                 source_code=normalized.get("source_code"),
                 title=normalized.get("title"),
                 detail_url=normalized.get("url") or normalized.get("normalized_url"),
-                published_at=(normalized.get("extra_meta") or {}).get("published_at")
-                if isinstance(normalized.get("extra_meta"), dict)
-                else None,
-                issuer=(normalized.get("extra_meta") or {}).get("issuer")
-                if isinstance(normalized.get("extra_meta"), dict)
-                else None,
-                notice_type=(normalized.get("extra_meta") or {}).get("notice_type")
-                if isinstance(normalized.get("extra_meta"), dict)
-                else None,
-                region=(normalized.get("extra_meta") or {}).get("region")
-                if isinstance(normalized.get("extra_meta"), dict)
-                else None,
+                published_at=extra_meta.get("published_at") if extra_meta is not None else None,
+                issuer=extra_meta.get("issuer") if extra_meta is not None else None,
+                notice_type=extra_meta.get("notice_type") if extra_meta is not None else None,
+                region=extra_meta.get("region") if extra_meta is not None else None,
             )
         normalized["source_duplicate_key"] = source_duplicate_key
         return normalized
@@ -530,3 +524,8 @@ class DeduplicationService:
             return None
         text = str(value).strip()
         return text if text else None
+
+    def _as_mapping(self, value: object) -> Mapping[str, object] | None:
+        if isinstance(value, Mapping):
+            return value
+        return None

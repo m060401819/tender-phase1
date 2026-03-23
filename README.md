@@ -134,6 +134,45 @@ alembic current
 DEV_UP_REUSE_RUNNING=1 bash scripts/dev_up.sh
 ```
 
+## 0.13 模型关系注解与 Ruff 清理
+
+- `app/models/*.py` 中的 SQLAlchemy 2.x 关系字段已统一为 `from __future__ import annotations` + `if TYPE_CHECKING:` 的写法，关系注解改为 `Mapped[ModelName]` / `Mapped[list[ModelName]]`，用于清理 Ruff `F821 Undefined name`，同时避免运行时循环导入。
+- 同步清理了少量未使用 import 和未使用局部变量，范围仅限 `app/api/endpoints/crawl_jobs.py`、`scripts/run_crawl_job.py`、`crawler/tender_crawler/parsers/anhui_ggzy_zfcg_parser.py` 与 `tests/test_admin_e2e_playwright.py`，不涉及数据库 schema 或业务行为调整。
+
+## 0.14 mypy 低风险类型收口
+
+- 优先收敛了 `object/int`、`Mapping`/`dict` invariance、`Sequence -> list`、以及 endpoint 中字符串到 enum/`HttpUrl`/`Literal` 的显式适配，范围集中在 `app/services/health_rule_service.py`、`app/services/crawl_job_progress_service.py`、`crawler/tender_crawler/services/deduplication.py`、`app/services/crawl_job_service.py` 和若干 API endpoint。
+- 这轮没有修改抓取/入库业务逻辑，只补充类型缩小、辅助转换函数与 `model_validate(...)` 校验路径，用于提高 `mypy app crawler` 的通过率并减少后续类型噪音。
+
+## 0.15 mypy 第三方类型支持（最小化）
+
+- `pyproject.toml` 的 `dev` extra 新增 `types-openpyxl==3.1.5.20250919`，用于解决 `app/api/endpoints/notices.py` 与 `app/api/endpoints/reports.py` 的 `openpyxl` `import-untyped`，运行时依赖保持不变。
+- `APScheduler 3.11.2` 当前安装包不包含 `py.typed`，本仓库不额外引入来源不明的第三方 stub；`mypy` 仅对 `apscheduler.jobstores.base`、`apscheduler.schedulers.background`、`apscheduler.triggers.interval` 做局部 `ignore_missing_imports` override。
+- 保持“默认失败”原则：不启用全局 `ignore_missing_imports`，这样后续新增的未类型化第三方依赖仍会被 `mypy` 显式暴露。
+
+## 0.16 最小侵入式安全硬化
+
+- `scripts/run_crawl_job.py` 与 `app/services/source_crawl_trigger_service.py` 的 `subprocess` 调用已补充输入校验：固定使用显式 argv，限制 `spider/source_code/job_type` 与 `spider-arg/setting` 键名格式，并对动态片段拒绝换行与 NUL 控制字符。
+- 对确属必要的 `subprocess` 用法保留了代码旁精确说明：命令前缀固定、参数来源受控、且始终 `shell=False`，避免为消除告警而删除抓取/派发能力。
+- `ADMIN_AUTH_SECRET` 为空时，开发态 CSRF 签名不再回退到仓库内硬编码 secret；优先读取 `ADMIN_AUTH_DEV_FALLBACK_SECRET`，否则退回到进程内随机 secret。
+- Web 启动 host 已环境变量化：本地脚本默认 `APP_HOST=127.0.0.1`，容器编排显式设置 `APP_HOST=0.0.0.0`，避免本机开发默认绑定所有网卡。
+- 附件归档下载仅允许 `http/https` scheme，拒绝 `file://` 等非预期协议。
+
+## 0.17 Alembic logging 污染修复
+
+- 修复 `alembic/env.py` 在宿主进程内执行 `command.upgrade(...)` 时重载 `alembic.ini` logging 配置造成的全局污染：
+  - 不再在“宿主进程已经配置 logging”的情况下重写 root logger handlers
+  - 不再因为 Alembic `fileConfig(...)` 默认行为而禁用 `app.main`、`app.services.source_crawl_trigger_service`、`app.services.crawl_job_dispatch_service` 等现有 logger
+- 这个修复会直接消除“全量 pytest 后续 `caplog.records` 找不到结构化 `event`、但单测单跑正常”的套件级状态污染。
+- 已补回归测试：`tests/test_alembic_migrations.py::test_programmatic_upgrade_preserves_existing_app_loggers_and_handlers`，验证 Alembic 真实升级链执行后，已有 app logger 仍可发出结构化日志并被 `caplog` 捕获。
+
+## 0.18 Crawler Spider mypy 收口
+
+- 收紧了 `crawler/tender_crawler/spiders/base_source_spider.py`、`crawler/tender_crawler/spiders/ggzy_gov_cn_deal_spider.py`、`crawler/tender_crawler/spiders/anhui_ggzy_zfcg_spider.py` 的静态类型边界，不改抓取业务流程。
+- 需要 `.text/.encoding/.css()` 的路径统一在 callback 入口显式收窄到 `TextResponse`，同时保留 Scrapy callback 对外签名为 `Response`，避免与 Scrapy 基类和 `Request(callback=...)` 契约冲突。
+- `FormRequest(formdata=...)` 改为显式 `dict[str, str | Iterable[str]]` 类型，消除 `dict[str, str]` 的 invariance 报错。
+- `ggzy_gov_cn_deal` / `anhui_ggzy_zfcg` spider 对 parser 依赖改为更准确的具体类型注解，并补齐 JSON/list-item/selector 的局部 guard，解决 `None` 分支、`.get()`、`len()`、以及 `parsel.Selector` / `scrapy.Selector` 不匹配问题。
+
 ## 0. 交付文档索引
 
 - 演示与接手 Runbook：`docs/runbook.md`
@@ -353,7 +392,7 @@ bash scripts/dev_down.sh
 3. 等待 `postgres` healthy 可用
 4. 执行迁移：`alembic upgrade head`
 5. 检查并处理 `8000` 端口占用（避免重复启动本项目 uvicorn）
-6. 后台启动 Web：`uvicorn app.main:app --host 0.0.0.0 --port 8000`
+6. 后台启动 Web：`APP_HOST=${APP_HOST:-127.0.0.1} uvicorn app.main:app --host "$APP_HOST" --port 8000`
 7. 后台启动独立调度进程：`python -m app.run_source_scheduler`
 8. Web / Scheduler 日志分别写入：`logs/dev_web.log`、`logs/dev_scheduler.log`，且为 JSON Lines 结构化日志
 9. 打印访问地址，并在检测到 `xdg-open` 时自动打开浏览器
@@ -391,7 +430,7 @@ APP_ENV=dev python scripts/seed_sources.py --demo  # 仅演示环境需要
 终端 1 启动 Web：
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+APP_HOST=${APP_HOST:-127.0.0.1} uvicorn app.main:app --host "$APP_HOST" --port 8000
 ```
 
 终端 2 启动独立 scheduler：

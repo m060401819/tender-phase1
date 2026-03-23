@@ -27,6 +27,7 @@ class JsonlRawDocumentWriter(BaseRawDocumentWriter):
     def write_raw_document(self, item: dict) -> None:
         if self._fp is None:
             self.open()
-        assert self._fp is not None
+        if self._fp is None:
+            raise RuntimeError("raw document writer file handle is not available")
         self._fp.write(json.dumps(item, ensure_ascii=False) + "\n")
         self._fp.flush()

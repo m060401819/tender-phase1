@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,7 +27,7 @@ from app.services import (
     SourceCrawlTriggerService,
     SubprocessCrawlJobDispatcher,
 )
-from app.services.source_crawl_trigger_service import _database_url_for_bind
+from app.services.source_crawl_trigger_service import CrawlJobDispatchRequest, _database_url_for_bind
 
 
 class StubRunner:
@@ -466,3 +467,19 @@ def test_pending_dispatcher_abandons_failed_handoff_and_marks_job_failed(
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
+
+
+def test_subprocess_dispatcher_rejects_invalid_source_code_for_worker_command() -> None:
+    dispatcher = SubprocessCrawlJobDispatcher()
+
+    with pytest.raises(ValueError, match="source_code"):
+        dispatcher._build_command(
+            request=CrawlJobDispatchRequest(
+                source_code="../bad",
+                crawl_job_id=1,
+                job_type="manual",
+                max_pages=1,
+                backfill_year=None,
+            ),
+            database_url="sqlite+pysqlite:///tmp/test.db",
+        )

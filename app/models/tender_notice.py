@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -18,6 +19,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.notice_version import NoticeVersion
+    from app.models.source_site import SourceSite
+    from app.models.tender_attachment import TenderAttachment
 
 
 class TenderNotice(TimestampMixin, Base):
@@ -72,15 +78,15 @@ class TenderNotice(TimestampMixin, Base):
         nullable=True,
     )
 
-    source_site: Mapped["SourceSite"] = relationship(back_populates="tender_notices")
-    versions: Mapped[list["NoticeVersion"]] = relationship(
+    source_site: Mapped[SourceSite] = relationship(back_populates="tender_notices")
+    versions: Mapped[list[NoticeVersion]] = relationship(
         back_populates="notice",
         foreign_keys="NoticeVersion.notice_id",
         cascade="all, delete-orphan",
         order_by="NoticeVersion.version_no",
     )
-    current_version: Mapped["NoticeVersion | None"] = relationship(
+    current_version: Mapped[NoticeVersion | None] = relationship(
         foreign_keys=[current_version_id],
         post_update=True,
     )
-    attachments: Mapped[list["TenderAttachment"]] = relationship(back_populates="notice")
+    attachments: Mapped[list[TenderAttachment]] = relationship(back_populates="notice")

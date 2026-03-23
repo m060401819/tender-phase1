@@ -1,3 +1,4 @@
+import logging
 from logging.config import fileConfig
 
 from alembic import context
@@ -8,8 +9,24 @@ from app.core.config import settings
 from app.db.base import Base
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+
+
+def _configure_alembic_logging() -> None:
+    if config.config_file_name is None:
+        return
+
+    # When Alembic runs inside an already-booted host process (for example pytest
+    # invoking command.upgrade()), reloading alembic.ini logging would mutate the
+    # root handlers and disable existing app loggers. Preserve the host logging
+    # setup in that case and only initialize Alembic's default console logging
+    # when the process has not configured logging yet.
+    if logging.getLogger().handlers:
+        return
+
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
+
+
+_configure_alembic_logging()
 
 database_url = str(config.attributes.get("database_url") or settings.database_url)
 config.set_main_option("sqlalchemy.url", database_url)

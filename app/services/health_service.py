@@ -9,14 +9,14 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.schema import Table
+from sqlalchemy.sql.selectable import FromClause
 
 from app.db.session import get_session_bind, ping_database
 from app.models import CrawlJob, RawDocument, SourceSite, TenderNotice
 
 SERVICE_NAME = "tender-phase1"
 ALEMBIC_SCRIPT_LOCATION = Path(__file__).resolve().parents[2] / "alembic"
-REQUIRED_TABLES: tuple[tuple[str, Table], ...] = (
+REQUIRED_TABLES: tuple[tuple[str, FromClause], ...] = (
     ("source_site", SourceSite.__table__),
     ("crawl_job", CrawlJob.__table__),
     ("tender_notice", TenderNotice.__table__),
@@ -66,7 +66,7 @@ class ReadinessService:
         *,
         service_name: str = SERVICE_NAME,
         alembic_script_location: Path | None = None,
-        required_tables: Sequence[tuple[str, Table]] | None = None,
+        required_tables: Sequence[tuple[str, FromClause]] | None = None,
     ) -> None:
         self._session = session
         self._service_name = service_name

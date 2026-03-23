@@ -14,7 +14,8 @@ class Settings(BaseSettings):
     PRODUCTION_REQUIRED_FIELDS: ClassVar[dict[str, str]] = {
         "app_env": "APP_ENV",
         "database_url": "DATABASE_URL",
-        "admin_auth_secret": "ADMIN_AUTH_SECRET",
+        # Bandit B105 false positive: this is an env var name, not a credential value.
+        "admin_auth_secret": "ADMIN_AUTH_SECRET",  # nosec B105
         "log_level": "LOG_LEVEL",
     }
     LOG_LEVEL_ALIASES: ClassVar[dict[str, str]] = {
@@ -31,8 +32,10 @@ class Settings(BaseSettings):
 
     app_name: str = "招标信息聚合平台一期"
     app_env: str = "dev"
+    app_host: str = "127.0.0.1"
     database_url: str = DEVELOPMENT_DATABASE_URL
     admin_auth_secret: str = ""
+    admin_auth_dev_fallback_secret: str = ""
     log_level: str = "INFO"
     auth_basic_users_json: str = ""
     auth_basic_realm: str = "Tender Phase1 Admin"
@@ -56,7 +59,9 @@ class Settings(BaseSettings):
 
     @field_validator(
         "database_url",
+        "app_host",
         "admin_auth_secret",
+        "admin_auth_dev_fallback_secret",
         "auth_basic_users_json",
         "auth_basic_realm",
         mode="before",

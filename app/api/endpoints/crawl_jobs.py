@@ -16,7 +16,8 @@ from app.api.schemas import (
 from app.api.endpoints.sources import get_source_crawl_trigger_service
 from app.core.auth import require_ops_user
 from app.db.session import get_db
-from app.models import CrawlJob, SourceSite
+from app.models import SourceSite
+from app.repositories import CrawlJobRecord
 from app.repositories import CrawlJobRepository
 from app.services import (
     CrawlJobQueryService,
@@ -72,12 +73,12 @@ def get_crawl_job(job_id: int, db: Session = Depends(get_db)) -> CrawlJobDetailR
         id=job.id,
         source_site_id=job.source_site_id,
         source_code=job.source_code,
-        job_type=job.job_type,
-        status=job.status,
+        job_type=_to_crawl_job_type(job.job_type),
+        status=_to_crawl_job_status(job.status),
         retry_of_job_id=job.retry_of_job_id,
         retry_of_job_message=job.retry_of_job_message,
         retried_by_job_id=job.retried_by_job_id,
-        retried_by_status=job.retried_by_status,
+        retried_by_status=_to_optional_crawl_job_status(job.retried_by_status),
         retried_by_finished_at=job.retried_by_finished_at,
         retried_by_message=job.retried_by_message,
         queued_at=job.queued_at,
@@ -144,8 +145,8 @@ def retry_crawl_job(
             id=retry_job.id,
             source_site_id=retry_job.source_site_id,
             source_code=source.code,
-            job_type=retry_job.job_type,
-            status=retry_job.status,
+            job_type=_to_crawl_job_type(retry_job.job_type),
+            status=_to_crawl_job_status(retry_job.status),
             retry_of_job_id=retry_job.retry_of_job_id,
             retry_of_job_message=None,
             retried_by_job_id=None,
@@ -179,17 +180,17 @@ def retry_crawl_job(
     )
 
 
-def _to_list_item(job) -> CrawlJobListItemResponse:  # type: ignore[no-untyped-def]
+def _to_list_item(job: CrawlJobRecord) -> CrawlJobListItemResponse:
     return CrawlJobListItemResponse(
         id=job.id,
         source_site_id=job.source_site_id,
         source_code=job.source_code,
-        job_type=job.job_type,
-        status=job.status,
+        job_type=_to_crawl_job_type(job.job_type),
+        status=_to_crawl_job_status(job.status),
         retry_of_job_id=job.retry_of_job_id,
         retry_of_job_message=job.retry_of_job_message,
         retried_by_job_id=job.retried_by_job_id,
-        retried_by_status=job.retried_by_status,
+        retried_by_status=_to_optional_crawl_job_status(job.retried_by_status),
         retried_by_finished_at=job.retried_by_finished_at,
         retried_by_message=job.retried_by_message,
         queued_at=job.queued_at,
@@ -216,3 +217,17 @@ def _to_list_item(job) -> CrawlJobListItemResponse:  # type: ignore[no-untyped-d
         failure_reason=job.failure_reason,
         message=job.message,
     )
+
+
+def _to_crawl_job_type(value: str) -> CrawlJobType:
+    return CrawlJobType(value)
+
+
+def _to_crawl_job_status(value: str) -> CrawlJobStatus:
+    return CrawlJobStatus(value)
+
+
+def _to_optional_crawl_job_status(value: str | None) -> CrawlJobStatus | None:
+    if value is None:
+        return None
+    return CrawlJobStatus(value)
