@@ -10,6 +10,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
+import app.core.python_runtime as python_runtime_module
 import app.services.source_crawl_trigger_service as trigger_module
 from app.api.endpoints.sources import (
     get_crawl_command_runner,
@@ -483,3 +484,43 @@ def test_subprocess_dispatcher_rejects_invalid_source_code_for_worker_command() 
             ),
             database_url="sqlite+pysqlite:///tmp/test.db",
         )
+
+
+def test_resolve_project_python_executable_prefers_project_venv_python(tmp_path: Path, monkeypatch) -> None:
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.write_text("#!/usr/bin/env python3\n")
+
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(python_runtime_module.sys, "executable", "/usr/bin/python3.12")
+
+    resolved = python_runtime_module.resolve_project_python_executable(project_root=tmp_path)
+
+    assert resolved == str(venv_python)
+
+
+def test_subprocess_dispatcher_prefers_project_venv_python_for_worker_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.write_text("#!/usr/bin/env python3\n")
+
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(python_runtime_module.sys, "executable", "/usr/bin/python3.12")
+
+    dispatcher = SubprocessCrawlJobDispatcher()
+    command = dispatcher._build_command(
+        request=CrawlJobDispatchRequest(
+            source_code="anhui_ggzy_zfcg",
+            crawl_job_id=1,
+            job_type="manual",
+            max_pages=2,
+            backfill_year=None,
+        ),
+        database_url="sqlite+pysqlite:///tmp/test.db",
+        project_root=tmp_path,
+    )
+
+    assert command[0] == str(venv_python)

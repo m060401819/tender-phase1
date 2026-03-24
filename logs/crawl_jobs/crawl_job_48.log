@@ -1,0 +1,3 @@
+{"timestamp": "2026-03-23T03:41:36.634869+00:00", "level": "INFO", "logger": "__main__", "message": "crawl worker started", "event": "crawl_worker_started", "source_code": "ggzy_gov_cn_deal", "crawl_job_id": 48, "job_type": "manual_retry", "triggered_by": "admin-retry", "max_pages": 100}
+/usr/bin/python3.12: No module named scrapy
+{"timestamp": "2026-03-23T03:41:36.706368+00:00", "level": "INFO", "logger": "__main__", "message": "crawl worker finished", "event": "crawl_worker_finished", "source_code": "ggzy_gov_cn_deal", "crawl_job_id": 48, "job_type": "manual_retry", "triggered_by": "admin-retry", "max_pages": 100}

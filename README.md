@@ -174,6 +174,14 @@ DEV_UP_REUSE_RUNNING=1 bash scripts/dev_up.sh
 - `FormRequest(formdata=...)` 改为显式 `dict[str, str | Iterable[str]]` 类型，消除 `dict[str, str]` 的 invariance 报错。
 - `ggzy_gov_cn_deal` / `anhui_ggzy_zfcg` spider 对 parser 依赖改为更准确的具体类型注解，并补齐 JSON/list-item/selector 的局部 guard，解决 `None` 分支、`.get()`、`len()`、以及 `parsel.Selector` / `scrapy.Selector` 不匹配问题。
 
+## 0.19 手动抓取稳定性修复
+
+- `ggzy_gov_cn_deal` 详情请求现在会补浏览器化请求头；当详情 URL 返回 JSON 异常响应（例如 `{"code":800,"message":"系统繁忙，请稍后再试!"}`）时，spider 会把它识别为“详情获取失败”并记录为可重试错误，不再误走 HTML parser 触发 `Cannot use css on a Selector of type 'json'`。
+- 后台 worker 与 `scripts/run_crawl_job.py` 现在统一优先使用项目根目录 `.venv` 下的 Python 解释器，其次才回退到 `VIRTUAL_ENV` / 当前解释器，避免手动抓取从 Web 进程派发时误落到系统 Python 并报 `No module named scrapy`。
+- 已补回归测试：
+  - `tests/crawler/test_ggzy_gov_cn_deal_spider.py`
+  - `tests/test_manual_crawl_trigger.py`
+
 ## 0. 交付文档索引
 
 - 演示与接手 Runbook：`docs/runbook.md`

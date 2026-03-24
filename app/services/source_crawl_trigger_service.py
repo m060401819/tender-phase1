@@ -7,7 +7,6 @@ from pathlib import Path
 import re
 # Bandit B404 false positive: crawl workers intentionally use subprocess with validated argv and shell=False.
 import subprocess  # nosec B404
-import sys
 import time
 from typing import Callable, Protocol
 
@@ -15,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.python_runtime import resolve_project_python_executable
 from app.core.logging import build_log_extra
 from app.models import CrawlError, CrawlJob, RawDocument, SourceSite
 from app.services.crawl_job_payloads import (
@@ -137,7 +137,11 @@ class SubprocessCrawlJobDispatcher:
             logs_dir = project_root / "logs" / "crawl_jobs"
             logs_dir.mkdir(parents=True, exist_ok=True)
             log_path = logs_dir / f"crawl_job_{int(request.crawl_job_id)}.log"
-            command = self._build_command(request=request, database_url=database_url)
+            command = self._build_command(
+                request=request,
+                database_url=database_url,
+                project_root=project_root,
+            )
             env = dict(os.environ)
             env.setdefault("PYTHONUNBUFFERED", "1")
 
@@ -225,7 +229,13 @@ class SubprocessCrawlJobDispatcher:
         finally:
             crawl_job_service.close()
 
-    def _build_command(self, *, request: CrawlJobDispatchRequest, database_url: str) -> list[str]:
+    def _build_command(
+        self,
+        *,
+        request: CrawlJobDispatchRequest,
+        database_url: str,
+        project_root: Path | None = None,
+    ) -> list[str]:
         _validate_source_code_for_subprocess(request.source_code)
         _validate_job_type_for_subprocess(request.job_type)
         _validate_database_url_for_subprocess(database_url)
@@ -234,7 +244,7 @@ class SubprocessCrawlJobDispatcher:
         if request.backfill_year is not None and int(request.backfill_year) < 2000:
             raise ValueError("backfill_year must be >= 2000")
         command = [
-            _resolved_python_executable(),
+            _resolved_python_executable(project_root=project_root),
             "-m",
             "app.run_crawl_job",
             "--database-url",
@@ -1280,8 +1290,8 @@ def _database_url_for_bind(bind: object) -> str:
     return str(url)
 
 
-def _resolved_python_executable() -> str:
-    return str(Path(sys.executable).resolve())
+def _resolved_python_executable(*, project_root: Path | None = None) -> str:
+    return resolve_project_python_executable(project_root=project_root)
 
 
 def _validate_subprocess_fragment(value: object, *, label: str) -> str:

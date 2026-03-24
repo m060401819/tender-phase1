@@ -38,6 +38,11 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
     parser: GgzyGovCnDealParser
 
     list_api_url = "https://www.ggzy.gov.cn/information/pubTradingInfo/getTradList"
+    browser_user_agent = (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    )
 
     def __init__(
         self,
@@ -89,6 +94,7 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
         for url in self.start_urls:
             yield scrapy.Request(
                 url=url,
+                headers=self._build_page_headers(referer=None),
                 callback=self.parse_landing,
                 errback=self.handle_request_error,
                 dont_filter=True,
@@ -114,15 +120,11 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
         yield self._build_list_request(page=1, list_page_url=text_response.url)
 
     def _build_list_request(self, *, page: int, list_page_url: str) -> scrapy.FormRequest:
-        headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": list_page_url,
-        }
         return scrapy.FormRequest(
             url=self.list_api_url,
             method="POST",
             formdata=self._build_list_formdata(page=page),
-            headers=headers,
+            headers=self._build_ajax_headers(referer=list_page_url),
             callback=self.parse_list_page,
             errback=self.handle_request_error,
             cb_kwargs={
@@ -185,6 +187,7 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
                 if parsed_record.detail_url:
                     yield scrapy.Request(
                         url=parsed_record.detail_url,
+                        headers=self._build_page_headers(referer=list_page_url),
                         callback=self.parse_detail,
                         errback=self.handle_request_error,
                         cb_kwargs={
@@ -269,6 +272,18 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
                 "notice_type": parsed_record.notice_type,
             },
         )
+
+        detail_error_message = self._extract_detail_error_message(text_response)
+        if detail_error_message is not None:
+            yield self._build_error_item(
+                stage="fetch",
+                url=text_response.url,
+                error_type="DetailPageError",
+                error_message=detail_error_message,
+                traceback_text="",
+                retryable=True,
+            )
+            return
 
         try:
             parsed_notice = self.parser.parse_detail_notice(
@@ -372,6 +387,48 @@ class GgzyGovCnDealSpider(BaseSourceSpider):
                 published_at=parsed_notice.published_at.isoformat() if parsed_notice.published_at else parsed_record.published_at_iso,
                 source_url=text_response.url,
             )
+
+    def _build_page_headers(self, *, referer: str | None) -> dict[str, str]:
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "User-Agent": self.browser_user_agent,
+        }
+        if referer:
+            headers["Referer"] = referer
+        return headers
+
+    def _build_ajax_headers(self, *, referer: str) -> dict[str, str]:
+        headers = self._build_page_headers(referer=referer)
+        headers.update(
+            {
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
+        return headers
+
+    def _extract_detail_error_message(self, response: TextResponse) -> str | None:
+        payload = self._parse_json_payload(response.text)
+        if payload is None:
+            return None
+
+        if isinstance(payload, dict):
+            code = self._as_int(payload.get("code"))
+            message = self._as_str(payload.get("message")) or self._as_str(payload.get("msg")) or "-"
+            if code is not None:
+                return f"详情获取失败: 详情页返回JSON code={code} message={message}"
+
+        return "详情获取失败: 详情页返回 JSON 响应，当前未返回可解析 HTML"
+
+    def _parse_json_payload(self, raw_text: str) -> object | None:
+        stripped = raw_text.lstrip()
+        if not stripped or stripped[0] not in ("{", "["):
+            return None
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
 
     def _build_list_formdata(self, *, page: int) -> FormData:
         formdata: FormData = {

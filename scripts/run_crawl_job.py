@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.config import settings as app_settings  # noqa: E402
+from app.core.python_runtime import resolve_project_python_executable  # noqa: E402
 from app.models import CrawlError, RawDocument  # noqa: E402
 from app.services import CRAWL_JOB_TYPES, CrawlJobService  # noqa: E402
 from app.services.source_adapter_registry import (  # noqa: E402
@@ -143,7 +144,7 @@ def _validate_subprocess_fragment(value: object, *, label: str, allow_empty: boo
 
 
 def _resolved_python_executable() -> str:
-    return str(Path(sys.executable).resolve())
+    return resolve_project_python_executable(project_root=PROJECT_ROOT)
 
 
 def format_command_for_display(command: list[str]) -> str:

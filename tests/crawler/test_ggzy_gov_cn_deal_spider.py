@@ -95,6 +95,8 @@ def test_ggzy_spider_landing_and_list_flow_with_run_dedup() -> None:
     detail_requests = [item for item in list_items if isinstance(item, Request)]
     assert len(detail_requests) == 1
     assert detail_requests[0].url == "https://www.ggzy.gov.cn/deal/a.html"
+    assert detail_requests[0].headers.get("Referer") == b"https://www.ggzy.gov.cn/deal/dealList.html?HEADER_DEAL_TYPE=02"
+    assert detail_requests[0].headers.get("User-Agent") == spider.browser_user_agent.encode()
 
     list_raw = next(
         item
@@ -140,3 +142,50 @@ def test_ggzy_spider_reports_captcha_error() -> None:
     ]
     assert error_items
     assert "验证码" in (error_items[0].get("error_message") or "")
+
+
+def test_ggzy_spider_marks_json_detail_response_as_retryable_fetch_error() -> None:
+    spider = GgzyGovCnDealSpider(max_pages=1, job_type="manual")
+    list_page_url = "https://www.ggzy.gov.cn/deal/dealList.html?HEADER_DEAL_TYPE=02"
+    parsed_record = spider.parser.parse_list_record(
+        record={
+            "title": "某地低压透明化改造采购合同",
+            "publishTime": "2026-03-20",
+            "provinceText": "浙江省",
+            "transactionSourcesPlatformText": "温州市公共资源交易网",
+            "informationTypeText": "采购合同",
+            "url": "/information/deal/html/a/330000/0203/20260320/example.html",
+        },
+        source_code=spider.source_code,
+        list_page_url=list_page_url,
+    )
+    assert parsed_record is not None
+
+    response = _build_response(
+        "https://www.ggzy.gov.cn/information/deal/html/a/330000/0203/20260320/example.html",
+        json.dumps({"code": 800, "message": "系统繁忙，请稍后再试!"}, ensure_ascii=False),
+        content_type="application/json",
+    )
+
+    emitted = list(
+        spider.parse_detail(
+            response,
+            list_page_url=list_page_url,
+            record=spider._serialize_record(parsed_record),
+        )
+    )
+
+    item_types = [ItemAdapter(item).get("item_type") for item in emitted]
+    assert ITEM_TYPE_RAW_DOCUMENT in item_types
+    assert ITEM_TYPE_CRAWL_ERROR in item_types
+    assert ITEM_TYPE_TENDER_NOTICE not in item_types
+    assert ITEM_TYPE_NOTICE_VERSION not in item_types
+
+    error_item = next(
+        ItemAdapter(item)
+        for item in emitted
+        if ItemAdapter(item).get("item_type") == ITEM_TYPE_CRAWL_ERROR
+    )
+    assert error_item.get("stage") == "fetch"
+    assert error_item.get("retryable") is True
+    assert error_item.get("error_message") == "详情获取失败: 详情页返回JSON code=800 message=系统繁忙，请稍后再试!"
