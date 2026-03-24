@@ -86,6 +86,7 @@ alembic current
   - 自动调度命中互斥时会记为 `last_schedule_status=skipped`，不再误记为失败
   - `pending` 任务现在以 durable queue 形式保留，独立 scheduler/dispatcher 会继续扫描未领取或派发租约过期的任务并重试消费
   - 已补回归测试覆盖：后台入队、pending 延迟消费/派发失败、`running` 租约超时恢复，以及双 scheduler 实例重复触发时的单来源互斥，见 `tests/test_manual_crawl_trigger.py`、`tests/test_crawl_job_service.py`、`tests/test_crawl_job_api.py`、`tests/test_source_schedule_service.py`
+  - `20260322_0011` 在 SQLite 上执行历史活跃任务收敛更新时，datetime 参数已改为显式 `DateTime(timezone=True)` 绑定，避免继续依赖 Python 3.12 已弃用的 sqlite 默认 datetime adapter；迁移写入语义保持不变。
 
 ## 0.8 异常任务重试并发安全
 

@@ -22,6 +22,19 @@ depends_on: Union[str, Sequence[str], None] = None
 
 _ACTIVE_STATUSES_SQL = "('pending', 'running')"
 _MUTEX_INDEX_NAME = "uq_crawl_job_source_active"
+_FAILED_DUPLICATE_UPDATE = sa.text(
+    """
+    UPDATE crawl_job
+    SET status = 'failed',
+        started_at = COALESCE(started_at, picked_at, queued_at, created_at, :moment),
+        finished_at = :moment,
+        heartbeat_at = COALESCE(heartbeat_at, :moment),
+        timeout_at = NULL,
+        lease_expires_at = NULL,
+        message = :message
+    WHERE id = :job_id
+    """
+).bindparams(sa.bindparam("moment", type_=sa.DateTime(timezone=True)))
 
 
 def upgrade() -> None:
@@ -86,19 +99,7 @@ def _collapse_legacy_active_duplicates(conn) -> None:  # type: ignore[no-untyped
                 ),
             )
             conn.execute(
-                sa.text(
-                    """
-                    UPDATE crawl_job
-                    SET status = 'failed',
-                        started_at = COALESCE(started_at, picked_at, queued_at, created_at, :moment),
-                        finished_at = :moment,
-                        heartbeat_at = COALESCE(heartbeat_at, :moment),
-                        timeout_at = NULL,
-                        lease_expires_at = NULL,
-                        message = :message
-                    WHERE id = :job_id
-                    """
-                ),
+                _FAILED_DUPLICATE_UPDATE,
                 {
                     "moment": moment,
                     "message": failure_message,
